@@ -99,9 +99,39 @@ async function handleColumnUpdate(thread, event) {
   const newValue = event.value?.label?.text || event.value?.text || event.textValue || 'Updated';
   const previousValue = event.previousValue?.label?.text || event.previousValue?.text || 'N/A';
 
-  const message = `🔄 **${columnTitle} Changed**\n` +
-                  `~~${previousValue}~~ → **${newValue}**\n` +
-                  `_Updated by ${event.userId || 'Unknown'}_`;
+  // Map column names to friendly display names
+  const columnMapping = {
+    'Start Date': 'WAL Start Date',
+    'End Date': 'WAL End Date',
+    'Location': 'Location of Store',
+    'Contact': 'Walmart Store Contact Info',
+    'Material Quantities': 'Materials',
+    'CTL Notes': 'CTL Inspectors',
+    'Survey Assignment': 'Surveyor',
+    'Ceremony Actual POD': '⚠️ IMPORTANT END BY DATE',
+    'Material Notes': 'Material Updates',
+    'UHC Comments': 'Becka Notes'
+  };
+
+  const displayName = columnMapping[columnTitle] || columnTitle;
+
+  // Special handling for Ceremony Actual POD - make it very visible
+  const isUrgentDeadline = columnTitle === 'Ceremony Actual POD';
+  const emoji = isUrgentDeadline ? '🚨' : '🔄';
+
+  let message = `${emoji} **${displayName} Changed**\n`;
+
+  if (previousValue !== 'N/A' && previousValue !== newValue) {
+    message += `~~${previousValue}~~ → **${newValue}**\n`;
+  } else {
+    message += `**${newValue}**\n`;
+  }
+
+  if (isUrgentDeadline) {
+    message += `\n⚠️ **URGENT: This is the final deadline date!** ⚠️\n`;
+  }
+
+  message += `_Updated by ${event.userId || 'Unknown'}_`;
 
   await thread.send(message);
   console.log(`[Webhook] Posted column update to thread ${thread.id}`);
@@ -111,14 +141,14 @@ async function handleColumnUpdate(thread, event) {
  * Handle new update/comment
  */
 async function handleNewUpdate(thread, event) {
-  const author = event.userName || 'Someone';
-  const updateText = event.textBody || event.body || 'No content';
+  const author = event.userName || event.user?.name || 'Someone';
+  const updateText = event.textBody || event.body || event.text_body || 'No content';
 
   const message = `💬 **New Comment from ${author}**\n` +
-                  `${updateText}`;
+                  `>>> ${updateText}`;
 
   await thread.send(message);
-  console.log(`[Webhook] Posted update to thread ${thread.id}`);
+  console.log(`[Webhook] Posted comment to thread ${thread.id}: "${updateText.substring(0, 50)}..."`);
 }
 
 /**
