@@ -2,6 +2,7 @@
 // Handles incoming webhooks from Monday.com and posts to Discord
 
 import { getThreadId, findThreadByMondayId, mapThread } from './threadMapper.js';
+import { getItem } from './mondayApi.js';
 
 /**
  * Handle Monday.com webhook
@@ -20,6 +21,13 @@ export async function handleMondayWebhook(payload, discordClient) {
     const itemId = event.pulseId || event.itemId;
     if (!itemId) {
       console.log('[Webhook] No item ID in webhook, ignoring');
+      return;
+    }
+
+    // Check if this item should be synced to Discord
+    const shouldSync = await checkIfItemShouldSync(itemId);
+    if (!shouldSync) {
+      console.log(`[Webhook] Item ${itemId} does not meet sync criteria, skipping`);
       return;
     }
 
@@ -149,4 +157,55 @@ function getStatusEmoji(status) {
   if (statusLower.includes('plan')) return '📋';
 
   return '📌';
+}
+
+/**
+ * Check if an item should be synced to Discord based on column values
+ * Only sync if:
+ * - "Mason/Carp" column contains "team mlb" (case insensitive)
+ * - OR "Survey Assignment" column contains "nick phelps" (case insensitive)
+ */
+async function checkIfItemShouldSync(itemId) {
+  try {
+    const item = await getItem(itemId);
+
+    if (!item || !item.column_values) {
+      console.log(`[Webhook] Could not get item details for ${itemId}`);
+      return false;
+    }
+
+    // Find the relevant columns
+    const masonCarpColumn = item.column_values.find(col =>
+      col.title && col.title.toLowerCase().includes('mason') && col.title.toLowerCase().includes('carp')
+    );
+
+    const surveyAssignmentColumn = item.column_values.find(col =>
+      col.title && col.title.toLowerCase() === 'survey assignment'
+    );
+
+    // Check if "Mason/Carp" contains "team mlb"
+    if (masonCarpColumn) {
+      const masonCarpValue = (masonCarpColumn.text || '').toLowerCase();
+      if (masonCarpValue.includes('team mlb')) {
+        console.log(`[Webhook] Item ${itemId} matches: Mason/Carp = "${masonCarpColumn.text}"`);
+        return true;
+      }
+    }
+
+    // Check if "Survey Assignment" contains "nick phelps"
+    if (surveyAssignmentColumn) {
+      const surveyValue = (surveyAssignmentColumn.text || '').toLowerCase();
+      if (surveyValue.includes('nick phelps')) {
+        console.log(`[Webhook] Item ${itemId} matches: Survey Assignment = "${surveyAssignmentColumn.text}"`);
+        return true;
+      }
+    }
+
+    console.log(`[Webhook] Item ${itemId} does not match sync criteria`);
+    return false;
+  } catch (error) {
+    console.error(`[Webhook] Error checking sync criteria for item ${itemId}:`, error);
+    // On error, default to syncing (fail open)
+    return true;
+  }
 }
