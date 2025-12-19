@@ -115,10 +115,14 @@ export async function getItem(itemId) {
         board {
           id
           name
+          columns {
+            id
+            title
+          }
         }
         column_values {
           id
-          title
+          type
           text
           value
         }
@@ -127,5 +131,19 @@ export async function getItem(itemId) {
   `;
 
   const result = await mondayRequest(query, { itemId: [itemId] });
+
+  // Map column IDs to titles using board column definitions
+  if (result.items[0]) {
+    const columnTitles = {};
+    result.items[0].board.columns.forEach(col => {
+      columnTitles[col.id] = col.title;
+    });
+
+    result.items[0].column_values = result.items[0].column_values.map(col => ({
+      ...col,
+      title: columnTitles[col.id] || col.id
+    }));
+  }
+
   return result.items[0];
 }
