@@ -106,6 +106,12 @@ app.get('/health', (req, res) => {
 // Monday.com webhook endpoint
 app.post('/webhook/monday', async (req, res) => {
   try {
+    // Handle Monday.com challenge verification
+    if (req.body.challenge) {
+      console.log('[Webhook] Responding to Monday.com challenge');
+      return res.status(200).json({ challenge: req.body.challenge });
+    }
+
     console.log('[Webhook] Received Monday.com webhook');
 
     // Import webhook handler
