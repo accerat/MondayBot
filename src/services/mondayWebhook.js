@@ -141,14 +141,28 @@ async function handleColumnUpdate(thread, event) {
  * Handle new update/comment
  */
 async function handleNewUpdate(thread, event) {
-  const author = event.userName || event.user?.name || 'Someone';
+  // Try multiple field names for author
+  const author = event.userName ||
+                 event.user_name ||
+                 event.user?.name ||
+                 event.creator?.name ||
+                 event.creatorName ||
+                 event.creator_name ||
+                 'Someone';
+
   const updateText = event.textBody || event.body || event.text_body || 'No content';
+
+  // Log the event to see what fields are available
+  console.log('[Webhook] Update event fields:', Object.keys(event));
+  if (author === 'Someone') {
+    console.log('[Webhook] Could not find author in event:', JSON.stringify(event, null, 2));
+  }
 
   const message = `💬 **New Comment from ${author}**\n` +
                   `>>> ${updateText}`;
 
   await thread.send(message);
-  console.log(`[Webhook] Posted comment to thread ${thread.id}: "${updateText.substring(0, 50)}..."`);
+  console.log(`[Webhook] Posted comment to thread ${thread.id}: "${updateText.substring(0, 50)}..." from ${author}`);
 }
 
 /**
