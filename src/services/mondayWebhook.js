@@ -2,7 +2,7 @@
 // Handles incoming webhooks from Monday.com and posts to Discord
 
 import { getThreadId, findThreadByMondayId, mapThread } from './threadMapper.js';
-import { getItem } from './mondayApi.js';
+import { getItem, getUserName } from './mondayApi.js';
 
 /**
  * Handle Monday.com webhook
@@ -141,22 +141,25 @@ async function handleColumnUpdate(thread, event) {
  * Handle new update/comment
  */
 async function handleNewUpdate(thread, event) {
-  // Try multiple field names for author
-  const author = event.userName ||
-                 event.user_name ||
-                 event.user?.name ||
-                 event.creator?.name ||
-                 event.creatorName ||
-                 event.creator_name ||
-                 'Someone';
+  // Get author name - first try direct fields, then look up by userId
+  let author = event.userName ||
+               event.user_name ||
+               event.user?.name ||
+               event.creator?.name ||
+               event.creatorName ||
+               event.creator_name;
+
+  // If no name found but we have userId, look it up
+  if (!author && event.userId) {
+    author = await getUserName(event.userId);
+  }
+
+  // Final fallback
+  if (!author) {
+    author = 'Someone';
+  }
 
   const updateText = event.textBody || event.body || event.text_body || 'No content';
-
-  // Log the event to see what fields are available
-  console.log('[Webhook] Update event fields:', Object.keys(event));
-  if (author === 'Someone') {
-    console.log('[Webhook] Could not find author in event:', JSON.stringify(event, null, 2));
-  }
 
   const message = `💬 **New Comment from ${author}**\n` +
                   `>>> ${updateText}`;

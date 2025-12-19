@@ -104,6 +104,28 @@ export async function updateColumn(boardId, itemId, columnId, value) {
 }
 
 /**
+ * Get user name from user ID
+ */
+export async function getUserName(userId) {
+  const query = `
+    query ($userId: [ID!]) {
+      users (ids: $userId) {
+        id
+        name
+      }
+    }
+  `;
+
+  try {
+    const result = await mondayRequest(query, { userId: [userId] });
+    return result.users[0]?.name || 'Someone';
+  } catch (error) {
+    console.error(`[MondayAPI] Error fetching user ${userId}:`, error);
+    return 'Someone';
+  }
+}
+
+/**
  * Get item details (to find board ID and column IDs)
  */
 export async function getItem(itemId) {
