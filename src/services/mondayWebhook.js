@@ -25,7 +25,8 @@ export async function handleMondayWebhook(payload, discordClient) {
     }
 
     // Check if this item should be synced to Discord
-    const shouldSync = await checkIfItemShouldSync(itemId);
+    const itemDetails = await getItem(itemId);
+    const shouldSync = await checkIfItemShouldSync(itemId, itemDetails);
     if (!shouldSync) {
       console.log(`[Webhook] Item ${itemId} does not meet sync criteria, skipping`);
       return;
@@ -34,17 +35,23 @@ export async function handleMondayWebhook(payload, discordClient) {
     // Find the Discord thread for this Monday item
     let threadId = await getThreadId(itemId);
 
-    // If not mapped yet, try to find it
+    // If not mapped yet, try to find it or create it
     if (!threadId) {
       console.log(`[Webhook] Thread not mapped for Monday item ${itemId}, searching...`);
       threadId = await findThreadByMondayId(itemId, discordClient);
 
       if (threadId) {
-        // Map it for future use
-        await mapThread(itemId, threadId, event.pulseName || 'Unknown Project');
+        // Found existing thread, map it
+        await mapThread(itemId, threadId, itemDetails.name || 'Unknown Project');
       } else {
-        console.log(`[Webhook] Could not find Discord thread for Monday item ${itemId}`);
-        return;
+        // No thread found - create a new one!
+        console.log(`[Webhook] Creating new Discord thread for Monday item ${itemId}`);
+        threadId = await createDiscordThread(itemId, itemDetails, discordClient);
+
+        if (!threadId) {
+          console.log(`[Webhook] Failed to create Discord thread for Monday item ${itemId}`);
+          return;
+        }
       }
     } else {
       threadId = threadId.threadId; // Extract from mapping object
@@ -165,9 +172,12 @@ function getStatusEmoji(status) {
  * - "Mason/Carp" column contains "team mlb" (case insensitive)
  * - OR "Survey Assignment" column contains "nick phelps" (case insensitive)
  */
-async function checkIfItemShouldSync(itemId) {
+async function checkIfItemShouldSync(itemId, item = null) {
   try {
-    const item = await getItem(itemId);
+    // If item not provided, fetch it
+    if (!item) {
+      item = await getItem(itemId);
+    }
 
     if (!item || !item.column_values) {
       console.log(`[Webhook] Could not get item details for ${itemId}`);
@@ -207,5 +217,47 @@ async function checkIfItemShouldSync(itemId) {
     console.error(`[Webhook] Error checking sync criteria for item ${itemId}:`, error);
     // On error, default to syncing (fail open)
     return true;
+  }
+}
+
+/**
+ * Create a new Discord thread for a Monday.com item
+ */
+async function createDiscordThread(itemId, itemDetails, discordClient) {
+  try {
+    const forumChannelId = process.env.PROJECTS_CATEGORY_ID;
+    if (!forumChannelId) {
+      console.error('[Webhook] PROJECTS_CATEGORY_ID not configured');
+      return null;
+    }
+
+    // Get the forum channel
+    const forumChannel = await discordClient.channels.fetch(forumChannelId);
+    if (!forumChannel || !forumChannel.isThreadOnly()) {
+      console.error(`[Webhook] Forum channel ${forumChannelId} not found or not a forum`);
+      return null;
+    }
+
+    // Create the thread
+    const threadName = itemDetails.name || `Monday Item ${itemId}`;
+    const thread = await forumChannel.threads.create({
+      name: threadName,
+      message: {
+        content: `🆕 **New Project Synced from Monday.com**\n\n` +
+                 `Project: **${threadName}**\n` +
+                 `Monday.com ID: \`${itemId}\`\n\n` +
+                 `This thread is now synced with Monday.com. Updates here and there will be reflected in both places.`
+      },
+    });
+
+    console.log(`[Webhook] Created Discord thread ${thread.id} for Monday item ${itemId}`);
+
+    // Map the thread
+    await mapThread(itemId, thread.id, threadName);
+
+    return thread.id;
+  } catch (error) {
+    console.error(`[Webhook] Error creating Discord thread for item ${itemId}:`, error);
+    return null;
   }
 }
