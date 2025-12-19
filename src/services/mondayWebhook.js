@@ -285,16 +285,66 @@ async function createDiscordThread(itemId, itemDetails, discordClient) {
       return null;
     }
 
-    // Create the thread
+    // Extract key fields from item details
+    const fields = {};
+    if (itemDetails.column_values) {
+      itemDetails.column_values.forEach(col => {
+        fields[col.title] = col.text || 'Not set';
+      });
+    }
+
+    // Build initial message with all key fields
     const threadName = itemDetails.name || `Monday Item ${itemId}`;
+    let message = `🆕 **New Project Synced from Monday.com**\n\n`;
+    message += `**${threadName}**\n`;
+    message += `Monday.com ID: \`${itemId}\`\n\n`;
+    message += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+    // Add key project details
+    if (fields['Start Date'] || fields['End Date']) {
+      message += `📅 **WAL Window:** ${fields['Start Date'] || 'TBD'} → ${fields['End Date'] || 'TBD'}\n`;
+    }
+
+    if (fields['Ceremony Actual POD']) {
+      message += `🚨 **IMPORTANT END BY DATE:** ${fields['Ceremony Actual POD']}\n`;
+      message += `⚠️ **This is the final deadline!** ⚠️\n`;
+    }
+
+    if (fields['Location']) {
+      message += `📍 **Location:** ${fields['Location']}\n`;
+    }
+
+    if (fields['Contact']) {
+      message += `📞 **Walmart Contact:** ${fields['Contact']}\n`;
+    }
+
+    if (fields['Survey Assignment']) {
+      message += `📋 **Surveyor:** ${fields['Survey Assignment']}\n`;
+    }
+
+    if (fields['CTL Notes']) {
+      message += `🔍 **CTL Inspectors:** ${fields['CTL Notes']}\n`;
+    }
+
+    if (fields['Material Quantities']) {
+      message += `📦 **Materials:** ${fields['Material Quantities']}\n`;
+    }
+
+    if (fields['Material Notes']) {
+      message += `📝 **Material Updates:** ${fields['Material Notes']}\n`;
+    }
+
+    if (fields['UHC Comments']) {
+      message += `💬 **Becka Notes:** ${fields['UHC Comments']}\n`;
+    }
+
+    message += `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+    message += `\n✅ This thread is now synced with Monday.com. Updates here and there will be reflected in both places.`;
+
+    // Create the thread
     const thread = await forumChannel.threads.create({
       name: threadName,
-      message: {
-        content: `🆕 **New Project Synced from Monday.com**\n\n` +
-                 `Project: **${threadName}**\n` +
-                 `Monday.com ID: \`${itemId}\`\n\n` +
-                 `This thread is now synced with Monday.com. Updates here and there will be reflected in both places.`
-      },
+      message: { content: message },
     });
 
     console.log(`[Webhook] Created Discord thread ${thread.id} for Monday item ${itemId}`);

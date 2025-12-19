@@ -107,6 +107,19 @@ export async function findThreadByMondayId(mondayItemId, discordClient) {
 }
 
 /**
+ * Get Monday.com item ID from Discord thread ID (reverse lookup)
+ */
+export async function getMondayItemIdFromThread(threadId) {
+  const mapping = await loadMapping();
+  for (const [mondayItemId, data] of Object.entries(mapping.mappings)) {
+    if (data.threadId === threadId) {
+      return mondayItemId;
+    }
+  }
+  return null;
+}
+
+/**
  * Get all mappings (for debugging)
  */
 export async function getAllMappings() {
