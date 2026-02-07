@@ -268,13 +268,85 @@ async function checkIfItemShouldSync(itemId, item = null) {
 }
 
 /**
+ * Determine the target Discord channel based on the Branch column value.
+ * Returns { channelId, flagged, values } where flagged=true means multiple branches selected.
+ */
+function getBranchChannel(itemDetails) {
+  const branchCol = itemDetails.column_values?.find(col =>
+    col.title && col.title.toLowerCase() === 'branch'
+  );
+
+  if (!branchCol || !branchCol.text || branchCol.text.trim() === '') {
+    // No branch set - use default
+    return { channelId: process.env.DEFAULT_CHANNEL_ID || process.env.PROJECTS_CATEGORY_ID, flagged: false, values: [] };
+  }
+
+  // Monday dropdown text is comma-separated when multiple values are selected
+  const values = branchCol.text.split(',').map(v => v.trim()).filter(Boolean);
+
+  if (values.length > 1) {
+    return { channelId: null, flagged: true, values };
+  }
+
+  const branch = values[0].toLowerCase();
+  if (branch === 'ess') {
+    return { channelId: process.env.ESS_CHANNEL_ID, flagged: false, values };
+  } else if (branch === 'opd') {
+    return { channelId: process.env.OPD_CHANNEL_ID, flagged: false, values };
+  } else {
+    return { channelId: process.env.DEFAULT_CHANNEL_ID || process.env.PROJECTS_CATEGORY_ID, flagged: false, values };
+  }
+}
+
+/**
+ * Flag an item with multiple branch values to the MLB office channel.
+ */
+async function flagMultipleBranches(itemId, itemDetails, discordClient) {
+  try {
+    const flagChannelId = process.env.FLAG_CHANNEL_ID;
+    if (!flagChannelId) {
+      console.error('[Webhook] FLAG_CHANNEL_ID not configured');
+      return;
+    }
+
+    const channel = await discordClient.channels.fetch(flagChannelId);
+    if (!channel) {
+      console.error(`[Webhook] Flag channel ${flagChannelId} not found`);
+      return;
+    }
+
+    const branchCol = itemDetails.column_values?.find(col =>
+      col.title && col.title.toLowerCase() === 'branch'
+    );
+    const branchValues = branchCol?.text || 'Unknown';
+    const itemName = itemDetails.name || `Item ${itemId}`;
+
+    const message = `⚠️ **Branch Conflict** - Item "${itemName}" (ID: \`${itemId}\`) has multiple branches selected: **${branchValues}**. Please fix this in Monday.com so it can be routed to the correct channel.`;
+
+    await channel.send(message);
+    console.log(`[Webhook] Flagged item ${itemId} for multiple branches: ${branchValues}`);
+  } catch (error) {
+    console.error(`[Webhook] Error flagging item ${itemId}:`, error);
+  }
+}
+
+/**
  * Create a new Discord thread for a Monday.com item
  */
 async function createDiscordThread(itemId, itemDetails, discordClient) {
   try {
-    const forumChannelId = process.env.PROJECTS_CATEGORY_ID;
+    // Determine target channel based on Branch column
+    const branchInfo = getBranchChannel(itemDetails);
+
+    if (branchInfo.flagged) {
+      console.log(`[Webhook] Item ${itemId} has multiple branches (${branchInfo.values.join(', ')}), flagging instead of creating thread`);
+      await flagMultipleBranches(itemId, itemDetails, discordClient);
+      return null;
+    }
+
+    const forumChannelId = branchInfo.channelId;
     if (!forumChannelId) {
-      console.error('[Webhook] PROJECTS_CATEGORY_ID not configured');
+      console.error('[Webhook] No channel ID resolved for item branch');
       return null;
     }
 
