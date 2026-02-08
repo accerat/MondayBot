@@ -2,6 +2,7 @@
 import { SlashCommandBuilder, PermissionFlagsBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder } from 'discord.js';
 import { getESSProjects, isMondayConfigured } from '../services/mondayApi.js';
 import { syncMultipleProjects, getSyncStats } from '../services/projectSyncOrchestrator.js';
+import { getThreadId } from '../services/threadMapper.js';
 
 /**
  * Show sync results summary
@@ -152,15 +153,40 @@ export async function execute(interaction, discordClient) {
         });
       }
 
-      const projectsToSync = mondayProjects.slice(0, limit);
+      // Filter out projects that already have Discord threads
+      await boardInteraction.editReply({
+        content: `Found ${mondayProjects.length} projects. Checking which ones need syncing...`,
+        components: []
+      });
+
+      const unsyncedProjects = [];
+      const alreadySyncedCount = { count: 0 };
+
+      for (const project of mondayProjects) {
+        const existingThread = await getThreadId(project.mondayItemId);
+        if (existingThread) {
+          alreadySyncedCount.count++;
+        } else {
+          unsyncedProjects.push(project);
+        }
+      }
+
+      if (unsyncedProjects.length === 0) {
+        return boardInteraction.editReply({
+          content: `All ${mondayProjects.length} projects in ${selectedBoards.join(' and ')} are already synced to Discord.`
+        });
+      }
+
+      const projectsToSync = unsyncedProjects.slice(0, limit);
 
       let message = `**Monday.com Project Sync Preview**\n\n`;
       message += `Board(s): **${selectedBoards.join(', ')}**\n`;
-      message += `Found ${mondayProjects.length} projects`;
+      message += `Found ${mondayProjects.length} total projects`;
       if (createdSince) {
         message += ` created since ${createdSince.toLocaleDateString()}`;
       }
-      message += `\nShowing ${projectsToSync.length} projects:\n\n`;
+      message += `\n${alreadySyncedCount.count} already synced, **${unsyncedProjects.length} need syncing**\n`;
+      message += `\nShowing ${projectsToSync.length} projects to sync:\n\n`;
 
       for (let i = 0; i < Math.min(10, projectsToSync.length); i++) {
         const p = projectsToSync[i];
