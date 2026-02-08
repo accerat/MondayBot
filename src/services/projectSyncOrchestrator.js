@@ -4,7 +4,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { mapThread } from './threadMapper.js';
+import { mapThread, getThreadId } from './threadMapper.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -304,8 +304,16 @@ async function saveSyncState(state) {
 
 /**
  * Check if a project has already been synced
+ * Checks both project-sync-state.json AND thread-mapping.json
  */
 async function isProjectSynced(mondayItemId) {
+  // First check thread-mapping.json (existing threads from webhooks or old TaskBot)
+  const existingThread = await getThreadId(mondayItemId);
+  if (existingThread) {
+    return true;
+  }
+
+  // Then check project-sync-state.json (projects synced via this command)
   const state = await loadSyncState();
   return !!state.syncedProjects[mondayItemId];
 }
@@ -400,12 +408,24 @@ export async function syncMultipleProjects(mondayProjects, options = {}) {
  */
 export async function getSyncStats() {
   const state = await loadSyncState();
-  const projects = Object.values(state.syncedProjects || {});
+  const syncedProjects = Object.values(state.syncedProjects || {});
+
+  // Also count thread mappings
+  let threadMappingCount = 0;
+  try {
+    const mappingPath = path.join(__dirname, '../../data/thread-mapping.json');
+    const mappingData = await fs.readFile(mappingPath, 'utf8');
+    const mappings = JSON.parse(mappingData);
+    threadMappingCount = Object.keys(mappings.mappings || {}).length;
+  } catch (e) {
+    // File doesn't exist or is invalid
+  }
 
   return {
-    totalSynced: projects.length,
-    successfulSyncs: projects.filter(p => !p.errors || Object.keys(p.errors).length === 0).length,
-    failedSyncs: projects.filter(p => p.errors && Object.keys(p.errors).length > 0).length,
-    lastSyncedAt: projects.length > 0 ? projects[projects.length - 1].syncedAt : null
+    totalSynced: Math.max(syncedProjects.length, threadMappingCount),
+    threadMappings: threadMappingCount,
+    successfulSyncs: syncedProjects.filter(p => !p.errors || Object.keys(p.errors).length === 0).length,
+    failedSyncs: syncedProjects.filter(p => p.errors && Object.keys(p.errors).length > 0).length,
+    lastSyncedAt: syncedProjects.length > 0 ? syncedProjects[syncedProjects.length - 1].syncedAt : null
   };
 }
