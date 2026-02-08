@@ -16,21 +16,40 @@ const forumChannelCache = new Map();
  * Determine the target Discord channel based on the Branch column value.
  */
 function getBranchChannelId(projectData) {
-  // Look for branch in rawColumns
-  const branchCol = Object.entries(projectData.rawColumns || {}).find(([id, col]) => {
-    // Match by column ID pattern or text content
-    return id.toLowerCase().includes('branch') ||
-           (col.text && col.text.toLowerCase().includes('branch'));
-  });
+  // Known Branch column IDs (dropdown type)
+  // MLB 2026 ESS board: dropdown_mm07kqx
+  const branchColumnIds = ['dropdown_mm07kqx'];
+
+  // Look for branch column by known ID first
+  let branchCol = null;
+  for (const colId of branchColumnIds) {
+    if (projectData.rawColumns && projectData.rawColumns[colId]) {
+      branchCol = [colId, projectData.rawColumns[colId]];
+      break;
+    }
+  }
+
+  // Fallback: look for any column with "branch" in ID or dropdown columns with ESS/OPD values
+  if (!branchCol) {
+    branchCol = Object.entries(projectData.rawColumns || {}).find(([id, col]) => {
+      return id.toLowerCase().includes('branch') ||
+             (col.text && (col.text.toLowerCase() === 'ess' || col.text.toLowerCase() === 'opd'));
+    });
+  }
 
   if (!branchCol || !branchCol[1]?.text || branchCol[1].text.trim() === '') {
+    console.log(`[sync] No branch value for "${projectData.name}", using DEFAULT channel`);
     return process.env.DEFAULT_CHANNEL_ID || process.env.PROJECTS_CATEGORY_ID;
   }
 
-  const values = branchCol[1].text.split(',').map(v => v.trim()).filter(Boolean);
+  const branchText = branchCol[1].text;
+  console.log(`[sync] Branch for "${projectData.name}": "${branchText}"`);
+
+  const values = branchText.split(',').map(v => v.trim()).filter(Boolean);
 
   if (values.length > 1) {
     // Multiple branches - return null to trigger flagging
+    console.log(`[sync] Multiple branches detected for "${projectData.name}": ${values.join(', ')}`);
     return null;
   }
 
