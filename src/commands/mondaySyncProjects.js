@@ -155,20 +155,65 @@ export async function execute(interaction, discordClient) {
 
       // Filter out projects that already have Discord threads
       await boardInteraction.editReply({
-        content: `Found ${mondayProjects.length} projects. Checking which ones need syncing...`,
+        content: `Found ${mondayProjects.length} projects. Checking Discord for existing threads...`,
         components: []
       });
+
+      // Get all forum channels to check for existing threads
+      const guildId = process.env.GUILD_ID;
+      const guild = await discordClient.guilds.fetch(guildId);
+      await guild.channels.fetch();
+
+      // Find all forum channels we might sync to
+      const forumChannelIds = [
+        process.env.ESS_CHANNEL_ID,
+        process.env.OPD_CHANNEL_ID,
+        process.env.DEFAULT_CHANNEL_ID,
+        process.env.PROJECTS_CATEGORY_ID
+      ].filter(Boolean);
+
+      // Collect all existing thread names from all forums
+      const existingThreadNames = new Set();
+
+      for (const channelId of forumChannelIds) {
+        try {
+          const channel = await discordClient.channels.fetch(channelId);
+          if (channel && channel.isThreadOnly && channel.isThreadOnly()) {
+            const activeThreads = await channel.threads.fetchActive();
+            const archivedThreads = await channel.threads.fetchArchived({ limit: 100 });
+
+            for (const [, thread] of activeThreads.threads) {
+              existingThreadNames.add(thread.name.toLowerCase());
+            }
+            for (const [, thread] of archivedThreads.threads) {
+              existingThreadNames.add(thread.name.toLowerCase());
+            }
+          }
+        } catch (e) {
+          console.log(`[monday-sync] Could not fetch threads from channel ${channelId}:`, e.message);
+        }
+      }
+
+      console.log(`[monday-sync] Found ${existingThreadNames.size} existing threads in Discord`);
 
       const unsyncedProjects = [];
       const alreadySyncedCount = { count: 0 };
 
       for (const project of mondayProjects) {
-        const existingThread = await getThreadId(project.mondayItemId);
-        if (existingThread) {
+        // Check mapping file first
+        const existingMapping = await getThreadId(project.mondayItemId);
+        if (existingMapping) {
           alreadySyncedCount.count++;
-        } else {
-          unsyncedProjects.push(project);
+          continue;
         }
+
+        // Check if thread exists in Discord by name
+        if (existingThreadNames.has(project.name.toLowerCase())) {
+          alreadySyncedCount.count++;
+          continue;
+        }
+
+        unsyncedProjects.push(project);
       }
 
       if (unsyncedProjects.length === 0) {
