@@ -1,0 +1,411 @@
+// src/services/projectSyncOrchestrator.js
+// Orchestrates project creation in Discord (simplified version for MondayBot)
+
+import fs from 'fs/promises';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { mapThread } from './threadMapper.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// In-memory cache for forum channels (persists across sync batch)
+const forumChannelCache = new Map();
+
+/**
+ * Determine the target Discord channel based on the Branch column value.
+ */
+function getBranchChannelId(projectData) {
+  // Look for branch in rawColumns
+  const branchCol = Object.entries(projectData.rawColumns || {}).find(([id, col]) => {
+    // Match by column ID pattern or text content
+    return id.toLowerCase().includes('branch') ||
+           (col.text && col.text.toLowerCase().includes('branch'));
+  });
+
+  if (!branchCol || !branchCol[1]?.text || branchCol[1].text.trim() === '') {
+    return process.env.DEFAULT_CHANNEL_ID || process.env.PROJECTS_CATEGORY_ID;
+  }
+
+  const values = branchCol[1].text.split(',').map(v => v.trim()).filter(Boolean);
+
+  if (values.length > 1) {
+    // Multiple branches - return null to trigger flagging
+    return null;
+  }
+
+  const branch = values[0].toLowerCase();
+  if (branch === 'ess') {
+    return process.env.ESS_CHANNEL_ID;
+  } else if (branch === 'opd') {
+    return process.env.OPD_CHANNEL_ID;
+  } else {
+    return process.env.DEFAULT_CHANNEL_ID || process.env.PROJECTS_CATEGORY_ID;
+  }
+}
+
+/**
+ * Find or create a forum channel in a category
+ */
+async function findOrCreateForumChannel(guild, categoryId, forumName) {
+  try {
+    console.log(`[sync-discord] Finding/creating forum: "${forumName}" in category: ${categoryId}`);
+
+    const normalizedForumName = forumName.toLowerCase().replace(/\s+/g, '-');
+    const cacheKey = `${categoryId}:${normalizedForumName}`;
+
+    if (forumChannelCache.has(cacheKey)) {
+      const cachedForum = forumChannelCache.get(cacheKey);
+      console.log(`[sync-discord] Found forum in cache: "${forumName}" (ID: ${cachedForum.id})`);
+      return cachedForum;
+    }
+
+    const category = await guild.channels.fetch(categoryId);
+    if (!category) {
+      throw new Error(`Category ${categoryId} not found`);
+    }
+
+    await guild.channels.fetch();
+
+    const existingForum = guild.channels.cache.find(
+      channel =>
+        channel.parentId === categoryId &&
+        channel.type === 15 && // GUILD_FORUM
+        channel.name === normalizedForumName
+    );
+
+    if (existingForum) {
+      console.log(`[sync-discord] Found existing forum: "${forumName}" (ID: ${existingForum.id})`);
+      forumChannelCache.set(cacheKey, existingForum);
+      return existingForum;
+    }
+
+    console.log(`[sync-discord] Creating new forum channel: "${forumName}"...`);
+    const newForum = await guild.channels.create({
+      name: forumName,
+      type: 15, // GUILD_FORUM
+      parent: categoryId,
+      reason: `Auto-created for Monday.com ${forumName} projects`
+    });
+
+    console.log(`[sync-discord] Created forum: "${newForum.name}" (ID: ${newForum.id})`);
+    forumChannelCache.set(cacheKey, newForum);
+
+    return newForum;
+  } catch (error) {
+    console.error(`[sync-discord] Error finding/creating forum channel "${forumName}":`, error.message);
+    throw error;
+  }
+}
+
+/**
+ * Create Discord thread for a project
+ */
+async function createDiscordThread(projectData, discordClient) {
+  if (!discordClient) {
+    throw new Error('Discord client not provided');
+  }
+
+  // Determine channel based on branch
+  let forumChannelId = getBranchChannelId(projectData);
+
+  // If null, multiple branches selected - flag it
+  if (forumChannelId === null) {
+    const flagChannelId = process.env.FLAG_CHANNEL_ID;
+    if (flagChannelId) {
+      try {
+        const flagChannel = await discordClient.channels.fetch(flagChannelId);
+        if (flagChannel) {
+          const branchCol = Object.entries(projectData.rawColumns || {}).find(([id]) =>
+            id.toLowerCase().includes('branch')
+          );
+          const branchValues = branchCol?.[1]?.text || 'Unknown';
+          await flagChannel.send(`⚠️ **Branch Conflict** - Item "${projectData.name}" (ID: \`${projectData.mondayItemId}\`) has multiple branches selected: **${branchValues}**. Please fix this in Monday.com.`);
+        }
+      } catch (e) {
+        console.error('[sync-discord] Error flagging multiple branches:', e);
+      }
+    }
+    return {
+      created: false,
+      existed: false,
+      flagged: true,
+      reason: 'Multiple branches selected'
+    };
+  }
+
+  // Fallback to PROJECTS_CATEGORY_ID if no branch channel configured
+  if (!forumChannelId) {
+    forumChannelId = process.env.PROJECTS_CATEGORY_ID;
+  }
+
+  if (!forumChannelId) {
+    throw new Error('No channel ID configured for project sync');
+  }
+
+  try {
+    console.log(`[sync-discord] Creating thread for: "${projectData.name}"`);
+
+    const guildId = process.env.GUILD_ID;
+    const guild = await discordClient.guilds.fetch(guildId);
+
+    // Try to fetch as forum channel directly first
+    let forum;
+    try {
+      forum = await discordClient.channels.fetch(forumChannelId);
+      if (!forum.isThreadOnly || !forum.isThreadOnly()) {
+        // It's a category, find/create forum within it
+        const forumName = projectData.boardName;
+        forum = await findOrCreateForumChannel(guild, forumChannelId, forumName);
+      }
+    } catch (e) {
+      // Fallback: treat as category ID
+      const forumName = projectData.boardName;
+      forum = await findOrCreateForumChannel(guild, forumChannelId, forumName);
+    }
+
+    // Check if thread already exists
+    const existingThreads = await forum.threads.fetchActive();
+    const existingThread = existingThreads.threads.find(t => t.name === projectData.name);
+
+    if (existingThread) {
+      console.log(`[sync-discord] Thread already exists: "${projectData.name}"`);
+      return {
+        created: false,
+        existed: true,
+        threadId: existingThread.id,
+        threadUrl: existingThread.url,
+        forumName: forum.name
+      };
+    }
+
+    const messageContent = formatProjectMessage(projectData);
+
+    const thread = await forum.threads.create({
+      name: projectData.name,
+      message: { content: messageContent },
+      reason: `Auto-created from Monday.com ${projectData.boardName}`
+    });
+
+    console.log(`[sync-discord] Created thread: "${thread.name}" (ID: ${thread.id})`);
+
+    // Map the thread
+    await mapThread(projectData.mondayItemId, thread.id, projectData.name);
+
+    return {
+      created: true,
+      existed: false,
+      threadId: thread.id,
+      threadUrl: thread.url,
+      forumName: forum.name
+    };
+  } catch (error) {
+    console.error(`[sync-discord] Error creating thread:`, error);
+    throw error;
+  }
+}
+
+/**
+ * Format project data into a Discord message
+ */
+function formatProjectMessage(project) {
+  const lines = [];
+
+  lines.push(`# ${project.name}\n`);
+
+  if (project.sageNumber) {
+    lines.push(`**Sage #:** ${project.sageNumber}`);
+  }
+
+  if (project.location) {
+    if (project.location.address) {
+      lines.push(`**Address:** ${project.location.address}`);
+    }
+    if (project.location.lat && project.location.lng) {
+      lines.push(`**GPS:** ${project.location.lat}, ${project.location.lng}`);
+      lines.push(`**Map:** https://www.google.com/maps?q=${project.location.lat},${project.location.lng}`);
+    }
+  } else if (project.city || project.state) {
+    lines.push(`**Location:** ${project.city}, ${project.state}`);
+  }
+
+  if (project.superintendent) {
+    lines.push(`**Superintendent:** ${project.superintendent}`);
+  }
+
+  if (project.crew) {
+    lines.push(`**Crew:** ${project.crew}`);
+  }
+
+  if (project.status) {
+    lines.push(`**Status:** ${project.status}`);
+  }
+
+  if (project.timeline) {
+    const from = project.timeline.from ? new Date(project.timeline.from).toLocaleDateString() : 'Not set';
+    const to = project.timeline.to ? new Date(project.timeline.to).toLocaleDateString() : 'Not set';
+    lines.push(`\n**Timeline:** ${from} → ${to}`);
+  }
+
+  if (project.uhcCSD || project.walCSD || project.endDate) {
+    lines.push(`\n**Key Dates:**`);
+    if (project.uhcCSD) lines.push(`- UHC CSD: ${project.uhcCSD}`);
+    if (project.walCSD) lines.push(`- WAL CSD: ${project.walCSD}`);
+    if (project.endDate) lines.push(`- End Date: ${project.endDate}`);
+  }
+
+  if (project.mlbSow) {
+    lines.push(`\n**MLB SOW:**`);
+    lines.push(`\`\`\`\n${project.mlbSow}\n\`\`\``);
+  }
+
+  if (project.materialQuantities) {
+    lines.push(`\n**Material Quantities:**`);
+    lines.push(`\`\`\`\n${project.materialQuantities}\n\`\`\``);
+  }
+
+  if (project.materialNotes) {
+    lines.push(`\n**Material Notes:** ${project.materialNotes}`);
+  }
+
+  lines.push(`\n---`);
+  lines.push(`*Auto-created from Monday.com ${project.boardName}*`);
+  lines.push(`*Monday Item ID: ${project.mondayItemId}*`);
+
+  return lines.join('\n');
+}
+
+// Path to store sync state
+const SYNC_STATE_PATH = path.join(__dirname, '../../data/project-sync-state.json');
+
+/**
+ * Load sync state from disk
+ */
+async function loadSyncState() {
+  try {
+    await fs.mkdir(path.dirname(SYNC_STATE_PATH), { recursive: true });
+    const data = await fs.readFile(SYNC_STATE_PATH, 'utf8');
+    return JSON.parse(data);
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return { syncedProjects: {} };
+    }
+    throw error;
+  }
+}
+
+/**
+ * Save sync state to disk
+ */
+async function saveSyncState(state) {
+  await fs.mkdir(path.dirname(SYNC_STATE_PATH), { recursive: true });
+  await fs.writeFile(SYNC_STATE_PATH, JSON.stringify(state, null, 2), 'utf8');
+}
+
+/**
+ * Check if a project has already been synced
+ */
+async function isProjectSynced(mondayItemId) {
+  const state = await loadSyncState();
+  return !!state.syncedProjects[mondayItemId];
+}
+
+/**
+ * Mark a project as synced
+ */
+async function markProjectSynced(mondayItemId, syncDetails) {
+  const state = await loadSyncState();
+  state.syncedProjects[mondayItemId] = {
+    ...syncDetails,
+    syncedAt: new Date().toISOString()
+  };
+  await saveSyncState(state);
+}
+
+/**
+ * Sync a Monday.com project to Discord
+ */
+export async function syncProjectToAllSystems(mondayProject, options = {}) {
+  const {
+    discordClient,
+    createInDiscord = true,
+    force = false
+  } = options;
+
+  const results = {
+    mondayItemId: mondayProject.mondayItemId,
+    mondayProjectName: mondayProject.name,
+    success: false,
+    created: {},
+    errors: {},
+    skipped: {}
+  };
+
+  try {
+    if (!force && await isProjectSynced(mondayProject.mondayItemId)) {
+      console.log(`[sync] Project ${mondayProject.name} already synced, skipping`);
+      results.skipped.all = 'Already synced';
+      return results;
+    }
+
+    console.log(`[sync] Starting sync for project: ${mondayProject.name}`);
+
+    if (createInDiscord) {
+      try {
+        const discordResult = await createDiscordThread(mondayProject, discordClient);
+        results.created.discord = discordResult;
+      } catch (error) {
+        console.error('[sync] Discord thread creation failed:', error);
+        results.errors.discord = error.message;
+      }
+    }
+
+    await markProjectSynced(mondayProject.mondayItemId, {
+      projectName: mondayProject.name,
+      sageNumber: mondayProject.sageNumber,
+      created: results.created,
+      errors: results.errors
+    });
+
+    results.success = Object.keys(results.errors).length === 0;
+    console.log(`[sync] Sync completed for ${mondayProject.name}. Success: ${results.success}`);
+
+    return results;
+  } catch (error) {
+    console.error(`[sync] Fatal error syncing project ${mondayProject.name}:`, error);
+    results.errors.fatal = error.message;
+    return results;
+  }
+}
+
+/**
+ * Sync multiple Monday.com projects
+ */
+export async function syncMultipleProjects(mondayProjects, options = {}) {
+  const results = [];
+
+  for (const project of mondayProjects) {
+    const result = await syncProjectToAllSystems(project, options);
+    results.push(result);
+
+    // Small delay to avoid rate limiting
+    await new Promise(resolve => setTimeout(resolve, 500));
+  }
+
+  return results;
+}
+
+/**
+ * Get sync statistics
+ */
+export async function getSyncStats() {
+  const state = await loadSyncState();
+  const projects = Object.values(state.syncedProjects || {});
+
+  return {
+    totalSynced: projects.length,
+    successfulSyncs: projects.filter(p => !p.errors || Object.keys(p.errors).length === 0).length,
+    failedSyncs: projects.filter(p => p.errors && Object.keys(p.errors).length > 0).length,
+    lastSyncedAt: projects.length > 0 ? projects[projects.length - 1].syncedAt : null
+  };
+}

@@ -125,6 +125,170 @@ export async function getUserName(userId) {
   }
 }
 
+// Board IDs for ESS projects
+const BOARD_IDS = {
+  ESS_2025: '7059269339',
+  ESS_2026: '18392974573'  // 2026 mlb ess (new board as of Dec 2025)
+};
+
+/**
+ * Check if Monday.com is properly configured
+ */
+export function isMondayConfigured() {
+  return !!MONDAY_API_TOKEN;
+}
+
+/**
+ * Get board IDs
+ */
+export function getBoardIds() {
+  return BOARD_IDS;
+}
+
+/**
+ * Get all items from ESS boards
+ * @param {object} options - Query options
+ * @param {Date} [options.createdSince] - Only get items created after this date
+ * @returns {Promise<Array>} List of projects
+ */
+export async function getESSProjects({ createdSince } = {}) {
+  try {
+    console.log('[monday] Fetching ESS projects...');
+
+    const boardIds = [BOARD_IDS.ESS_2025, BOARD_IDS.ESS_2026];
+    const allProjects = [];
+
+    for (const boardId of boardIds) {
+      let cursor = null;
+      let hasMore = true;
+
+      while (hasMore) {
+        const query = `query ($boardId: [ID!], $cursor: String) {
+          boards(ids: $boardId) {
+            id
+            name
+            items_page(limit: 100, query_params: {rules: [], operator: and}, cursor: $cursor) {
+              cursor
+              items {
+                id
+                name
+                created_at
+                updated_at
+                column_values {
+                  id
+                  text
+                  value
+                }
+              }
+            }
+          }
+        }`;
+
+        const data = await mondayRequest(query, { boardId: [boardId], cursor });
+
+        const board = data.boards[0];
+        if (!board) break;
+
+        const items = board.items_page.items || [];
+
+        // Filter by creation date if specified
+        let filteredItems = items;
+        if (createdSince) {
+          filteredItems = items.filter(item => {
+            const createdAt = new Date(item.created_at);
+            return createdAt > createdSince;
+          });
+        }
+
+        // Parse and add to results
+        for (const item of filteredItems) {
+          const project = parseProjectItem(item, board.name);
+          allProjects.push(project);
+        }
+
+        // Check if there are more pages
+        cursor = board.items_page.cursor;
+        hasMore = items.length === 100 && cursor;
+      }
+    }
+
+    console.log(`[monday] Fetched ${allProjects.length} ESS projects`);
+    return allProjects;
+  } catch (error) {
+    console.error('[monday] Error fetching ESS projects:', error);
+    throw error;
+  }
+}
+
+/**
+ * Parse a Monday.com item into a structured project object
+ */
+function parseProjectItem(item, boardName) {
+  const columns = {};
+
+  // Convert column_values array to object for easier access
+  item.column_values.forEach(col => {
+    columns[col.id] = {
+      text: col.text,
+      value: col.value ? JSON.parse(col.value) : null
+    };
+  });
+
+  // Helper to get column text value
+  const getColumn = (id) => columns[id]?.text || '';
+  const getColumnValue = (id) => columns[id]?.value;
+
+  // Extract location data
+  const locationValue = getColumnValue('location__1') || getColumnValue('location_mktt6fdg');
+  const location = locationValue ? {
+    address: locationValue.address || '',
+    city: locationValue.city || getColumn('text_mkttmrk'),
+    state: locationValue.country || getColumn('text_mkttgw6h'),
+    lat: locationValue.lat,
+    lng: locationValue.lng
+  } : null;
+
+  return {
+    mondayItemId: item.id,
+    boardName,
+    name: item.name,
+    createdAt: new Date(item.created_at),
+    updatedAt: new Date(item.updated_at),
+
+    // Key project fields
+    sageNumber: getColumn('text_mkq7x0b9') || getColumn('text_mkttv5t8'),
+    location,
+    city: getColumn('text_mkttmrk') || location?.city || '',
+    state: getColumn('text_mkttgw6h') || location?.state || '',
+
+    // Scope of work
+    materialQuantities: getColumn('material_notes__1') || getColumn('long_text_mktt9e5b'),
+    materialNotes: getColumn('text9__1') || getColumn('text_mkttyv5v'),
+    otherNotes: getColumn('text_mkttbh86'),
+    mlbSow: getColumn('long_text_mkz4gkft'),
+
+    // Timeline
+    uhcCSD: getColumn('date_1_Mjj5bf4E') || getColumn('date_mkttbkq6'),
+    walCSD: getColumn('date_mktt8k9c'),
+    endDate: getColumn('date4') || getColumn('date_mkttr3mj'),
+    timeline: getColumnValue('timerange_mks352me') || getColumnValue('timerange_mkttmwwb'),
+
+    // Assignment
+    superintendent: getColumn('multiple_person_mkw3bmjz') || getColumn('multiple_person_mkx3hxxd'),
+    crew: getColumn('color_mks4ccmc') || getColumn('color_mkttktv7'),
+
+    // Status
+    status: getColumn('color_mkxend9y') || getColumn('color_mkx3hv3h'),
+    startStatus: getColumn('status_mkkbyzrp') || getColumn('color_mktt5dqs'),
+
+    // Communication
+    projectEmail: getColumn('text_mkwqrdjx') || getColumn('text_mkx3nt11'),
+
+    // Raw data for reference
+    rawColumns: columns
+  };
+}
+
 /**
  * Get item details (to find board ID and column IDs)
  */
