@@ -1,20 +1,37 @@
 # MondayBot
 
+**ALL Monday.com related functionality lives in this bot.**
+
 Bidirectional sync between Monday.com and Discord. Automatically posts Monday.com updates to Discord threads and allows field teams to update Monday.com from Discord using @MondayBot mentions.
+
+## Slash Commands
+
+| Command | Description |
+|---------|-------------|
+| `/monday-sync-projects` | Manually sync Monday.com ESS projects to Discord threads |
+| `/monday-status` | Check bot status and recent thread mappings |
+| `/project-info` | Display project details (use in a project thread) |
 
 ## Features
 
-### Monday.com → Discord (Automatic)
-- ✅ Field changes (status, dates, assignments)
-- ✅ New comments/updates
-- ✅ File uploads
-- ✅ Status changes
+### Branch-Based Channel Routing
+New projects are automatically routed to the correct Discord channel based on the "Branch" column:
+- **ESS** → Channel 1456320404330381425
+- **OPD** → Channel 1446176868695937084
+- **Other/Empty** → Channel 1397270791175012453
+- **Multiple branches selected** → Flagged to Channel 1397271405606998036 (no thread created)
+
+### Monday.com → Discord (Automatic via Webhooks)
+- Field changes (status, dates, assignments)
+- New comments/updates
+- File uploads
+- Status changes
 
 ### Discord → Monday.com (@MondayBot Commands)
-- ✅ Add updates/notes
-- ✅ Change status
-- ✅ Upload files with photos
-- ✅ Quick updates (just mention the bot)
+- Add updates/notes
+- Change status
+- Upload files with photos
+- Quick updates (just mention the bot)
 
 ## Setup
 
@@ -133,25 +150,60 @@ pm2 logs MondayBot
 ```
 MondayBot/
 ├── src/
-│   ├── index.js                    # Main bot + webhook server
-│   ├── register-commands.js        # Command registration
+│   ├── index.js                      # Main bot + webhook server
+│   ├── register-commands.js          # Command registration
 │   ├── commands/
-│   │   └── mondayStatus.js         # Status check command
+│   │   ├── mondayStatus.js           # /monday-status command
+│   │   ├── mondaySyncProjects.js     # /monday-sync-projects command
+│   │   └── projectInfo.js            # /project-info command
 │   └── services/
-│       ├── mondayApi.js            # Monday.com API client
-│       ├── mondayWebhook.js        # Webhook handler (Monday → Discord)
-│       ├── mondayMentionHandler.js # Mention handler (Discord → Monday)
-│       └── threadMapper.js         # Thread ID mapping
+│       ├── mondayApi.js              # Monday.com API client
+│       ├── mondayWebhook.js          # Webhook handler (Monday → Discord)
+│       ├── mondayMentionHandler.js   # Mention handler (Discord → Monday)
+│       ├── projectSyncOrchestrator.js # Project sync logic
+│       └── threadMapper.js           # Thread ID mapping
 ├── data/
-│   └── thread-mapping.json         # Monday item ID ↔ Discord thread ID
-├── .env                            # Configuration
+│   ├── thread-mapping.json           # Monday item ID ↔ Discord thread ID
+│   └── project-sync-state.json       # Sync state tracking
+├── .env                              # Configuration
 ├── package.json
 └── README.md
 ```
+
+## Environment Variables
+
+```env
+# Discord
+BOT_TOKEN=your_discord_bot_token
+APP_ID=your_app_id
+GUILD_ID=your_guild_id
+
+# Monday.com
+MONDAY_API_TOKEN=your_monday_api_token
+WEBHOOK_PORT=3001
+
+# Branch-based channel routing
+ESS_CHANNEL_ID=1456320404330381425
+OPD_CHANNEL_ID=1446176868695937084
+DEFAULT_CHANNEL_ID=1397270791175012453
+FLAG_CHANNEL_ID=1397271405606998036
+
+# Legacy (fallback)
+PROJECTS_CATEGORY_ID=1396930022941397079
+```
+
+## Deployment
+
+**IMPORTANT: This bot runs on AWS, NOT locally.**
+
+1. Edit code locally in `C:\Users\blitz\bots\MondayBot`
+2. `git add` + `git commit` + `git push origin main`
+3. SSH to AWS: `ssh -i /path/to/key admin@[AWS_IP]`
+4. Deploy: `cd /home/admin/bots/MondayBot && git pull && npm run register && pm2 restart MondayBot --update-env`
 
 ## Support
 
 For issues or questions, check the logs:
 ```bash
-pm2 logs MondayBot --lines 50
+ssh admin@[AWS_IP] "pm2 logs MondayBot --lines 50"
 ```
