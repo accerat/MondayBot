@@ -1,91 +1,83 @@
 # MondayBot Status Notes
 
-**Last Updated:** 2026-02-07
+**Last Updated:** 2026-02-08
 
 ---
 
-## CURRENT STATUS: Mostly Working, One Permission Issue
+## CURRENT STATUS: Fully Working
 
-MondayBot is deployed and running on AWS. The branch routing and sync features are implemented and working correctly.
+MondayBot is deployed and running on AWS. All features are implemented and tested.
 
 ---
 
-## What Was Done This Session
+## Features Implemented
 
-### 1. Branch-Based Channel Routing (COMPLETE)
-Added routing based on the "Branch" dropdown column in Monday.com:
-- **ESS** → Channel `1456320404330381425`
-- **OPD** → Channel `1446176868695937084`
+### 1. Branch-Based Channel Routing (WORKING)
+Routes Discord thread creation based on the "Branch" dropdown column in Monday.com:
+- **ESS** → Channel `1456320404330381425` (mlb-2026-ess)
+- **OPD** → Channel `1446176868695937084` (2026-opd-program)
 - **Other/Empty** → Channel `1397270791175012453` (non-walmart-project-reports)
-- **Multiple branches selected** → Flags to `1397271405606998036` instead of creating thread
+- **Multiple branches selected** → Flags to Channel `1397271405606998036` (no thread created)
 
-### 2. Moved /monday-sync-projects from TaskBot (COMPLETE)
-- Command now lives in MondayBot, removed from TaskBot
-- TaskBot no longer has any Monday.com functionality
-- All Monday.com related code is now in MondayBot
+**Important:** The Branch column ID is `dropdown_mm07kqx` on the MLB 2026 ESS board.
 
-### 3. Fixed Sync to Check Existing Threads (COMPLETE)
-- Command now checks Discord for existing threads by name (not just mapping file)
-- Checks both active AND archived threads
-- Correctly identifies 74+ existing threads and skips them
-- Only shows projects that genuinely need syncing
+### 2. Slash Commands (WORKING)
+All Monday.com commands are on MondayBot (moved from TaskBot):
+- `/monday-sync-projects` - Manually sync Monday.com projects to Discord
+- `/monday-status` - Check bot status and thread mappings
+- `/project-info` - Display project details (use in a project thread)
 
----
+### 3. Sync Detection (WORKING)
+The sync command correctly:
+- Checks thread-mapping.json for already-mapped projects
+- Searches Discord forums for existing threads by name
+- Only shows/syncs projects that genuinely need threads
+- Logs branch detection: `[sync] Branch for "Project Name": "ESS"`
 
-## PENDING ISSUE: Permission Error on non-walmart-project-reports
-
-**Problem:** 4 projects failed to sync with "Missing Access" error:
-- 1203.1008 Wimauma, FL
-- 2853.1003 La Plata, MD
-- Marine Layer - Austin
-- Edikted - Houston
-
-**Root Cause:** MondayBot lacks permissions in channel `1397270791175012453` (non-walmart-project-reports)
-
-**Verified Permissions:**
-```
-Channel: non-walmart-project-reports
-Bot: MondayBot#1546
-  ViewChannel: true
-  SendMessages: false        <-- MISSING
-  SendMessagesInThreads: true
-  CreatePublicThreads: false <-- MISSING
-  ManageThreads: false
-```
-
-**Fix Required:** In Discord, edit the `non-walmart-project-reports` channel:
-1. Go to channel settings → Permissions
-2. Add MondayBot or ensure botperms role has:
-   - Send Messages ✓
-   - Create Public Threads ✓
-
-These 4 projects are going to the DEFAULT channel because they either have no Branch set or a Branch value that's not "ESS" or "OPD".
+### 4. Webhook Routing (WORKING)
+Incoming Monday.com webhooks also route based on branch column.
 
 ---
 
-## Environment Variables on AWS
+## Key Files
 
-Located at `/home/admin/bots/MondayBot/.env`:
-```
+| File | Purpose |
+|------|---------|
+| `src/commands/mondaySyncProjects.js` | /monday-sync-projects command |
+| `src/services/projectSyncOrchestrator.js` | Sync logic, branch detection |
+| `src/services/mondayWebhook.js` | Webhook handling, branch routing |
+| `src/services/mondayApi.js` | Monday.com API client |
+| `src/services/threadMapper.js` | Thread ID mapping |
+| `data/thread-mapping.json` | Monday item ID ↔ Discord thread ID |
+| `data/project-sync-state.json` | Sync state tracking |
+
+---
+
+## Environment Variables (AWS)
+
+```env
+# Discord
+BOT_TOKEN=...
+APP_ID=1451325736232292426
+GUILD_ID=1396930021817581732
+
+# Monday.com
+MONDAY_API_TOKEN=...
+WEBHOOK_PORT=3001
+
+# Branch-based channel routing
 ESS_CHANNEL_ID=1456320404330381425
 OPD_CHANNEL_ID=1446176868695937084
 DEFAULT_CHANNEL_ID=1397270791175012453
 FLAG_CHANNEL_ID=1397271405606998036
+
+# Legacy (fallback)
 PROJECTS_CATEGORY_ID=1396930022941397079
 ```
 
 ---
 
-## Key Files Changed
-
-1. **src/services/mondayWebhook.js** - Branch routing for webhook-created threads
-2. **src/services/mondayApi.js** - Extended with getESSProjects(), isMondayConfigured()
-3. **src/services/projectSyncOrchestrator.js** - New file, handles manual sync logic
-4. **src/commands/mondaySyncProjects.js** - New file, the /monday-sync-projects command
-
----
-
-## Deployment Reminder
+## Deployment
 
 **ALL BOTS RUN ON AWS, NOT LOCALLY.**
 
@@ -106,8 +98,33 @@ ssh -i C:/Users/blitz/bots/LightsailDefaultKey-us-east-2-new.pem admin@[IP] "pm2
 
 ---
 
-## To Resume
+## Troubleshooting
 
-1. Fix the permission issue on `non-walmart-project-reports` channel in Discord
-2. Re-run `/monday-sync-projects` to sync the 4 failed projects
-3. Test webhook-based routing by creating a new item in Monday.com with different Branch values
+### "Already synced" but thread doesn't exist
+The thread was deleted but still in mapping. Fix:
+```bash
+# SSH to AWS and remove entries from mapping
+ssh admin@[IP] "cd /home/admin/bots/MondayBot && node -e \"
+const fs = require('fs');
+const mapping = JSON.parse(fs.readFileSync('./data/thread-mapping.json', 'utf8'));
+delete mapping.mappings['ITEM_ID_HERE'];
+fs.writeFileSync('./data/thread-mapping.json', JSON.stringify(mapping, null, 2));
+\""
+```
+
+### Projects going to wrong channel
+Check if the Branch column has the correct value in Monday.com. The bot looks for column ID `dropdown_mm07kqx`.
+
+### Permission errors
+Ensure MondayBot has `Send Messages` and `Create Public Threads` in the target forum channel.
+
+---
+
+## Session History (2026-02-08)
+
+1. Added branch-based channel routing (ESS/OPD/Other)
+2. Moved `/monday-sync-projects` from TaskBot to MondayBot
+3. Fixed sync to check existing Discord threads by name
+4. Fixed branch column detection (column ID `dropdown_mm07kqx`)
+5. Fixed permission issue on non-walmart-project-reports channel
+6. All 4 test projects synced correctly to proper channels
