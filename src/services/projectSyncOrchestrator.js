@@ -14,6 +14,12 @@ const forumChannelCache = new Map();
 
 /**
  * Determine the target Discord channel based on the Branch column value.
+ * Returns { channelId, flagged, reason } where flagged=true means item needs attention.
+ *
+ * Flagged cases (no thread created):
+ * - Empty/missing branch value
+ * - Multiple branches selected
+ * - Unrecognized branch value (not ESS or OPD)
  */
 function getBranchChannelId(projectData) {
   // Known Branch column IDs (dropdown type)
@@ -38,8 +44,8 @@ function getBranchChannelId(projectData) {
   }
 
   if (!branchCol || !branchCol[1]?.text || branchCol[1].text.trim() === '') {
-    console.log(`[sync] No branch value for "${projectData.name}", using DEFAULT channel`);
-    return process.env.DEFAULT_CHANNEL_ID || process.env.PROJECTS_CATEGORY_ID;
+    console.log(`[sync] No branch value for "${projectData.name}", flagging`);
+    return { channelId: null, flagged: true, reason: 'No branch selected' };
   }
 
   const branchText = branchCol[1].text;
@@ -48,18 +54,20 @@ function getBranchChannelId(projectData) {
   const values = branchText.split(',').map(v => v.trim()).filter(Boolean);
 
   if (values.length > 1) {
-    // Multiple branches - return null to trigger flagging
+    // Multiple branches - flag it
     console.log(`[sync] Multiple branches detected for "${projectData.name}": ${values.join(', ')}`);
-    return null;
+    return { channelId: null, flagged: true, reason: `Multiple branches selected: ${values.join(', ')}` };
   }
 
   const branch = values[0].toLowerCase();
   if (branch === 'ess') {
-    return process.env.ESS_CHANNEL_ID;
+    return { channelId: process.env.ESS_CHANNEL_ID, flagged: false, reason: null };
   } else if (branch === 'opd') {
-    return process.env.OPD_CHANNEL_ID;
+    return { channelId: process.env.OPD_CHANNEL_ID, flagged: false, reason: null };
   } else {
-    return process.env.DEFAULT_CHANNEL_ID || process.env.PROJECTS_CATEGORY_ID;
+    // Unrecognized branch - flag it
+    console.log(`[sync] Unrecognized branch "${values[0]}" for "${projectData.name}", flagging`);
+    return { channelId: null, flagged: true, reason: `Unrecognized branch: "${values[0]}"` };
   }
 }
 
@@ -126,32 +134,34 @@ async function createDiscordThread(projectData, discordClient) {
   }
 
   // Determine channel based on branch
-  let forumChannelId = getBranchChannelId(projectData);
+  const branchResult = getBranchChannelId(projectData);
 
-  // If null, multiple branches selected - flag it
-  if (forumChannelId === null) {
+  // If flagged (no valid branch), send to flag channel
+  if (branchResult.flagged) {
     const flagChannelId = process.env.FLAG_CHANNEL_ID;
     if (flagChannelId) {
       try {
         const flagChannel = await discordClient.channels.fetch(flagChannelId);
         if (flagChannel) {
           const branchCol = Object.entries(projectData.rawColumns || {}).find(([id]) =>
-            id.toLowerCase().includes('branch')
+            id.toLowerCase().includes('branch') || id === 'dropdown_mm07kqx'
           );
-          const branchValues = branchCol?.[1]?.text || 'Unknown';
-          await flagChannel.send(`⚠️ **Branch Conflict** - Item "${projectData.name}" (ID: \`${projectData.mondayItemId}\`) has multiple branches selected: **${branchValues}**. Please fix this in Monday.com.`);
+          const branchValues = branchCol?.[1]?.text || '(empty)';
+          await flagChannel.send(`⚠️ **Branch Issue** - Item "${projectData.name}" (ID: \`${projectData.mondayItemId}\`)\n**Reason:** ${branchResult.reason}\n**Current Branch Value:** ${branchValues}\n\nPlease set a valid branch (ESS or OPD) in Monday.com. The Discord thread will be created automatically once fixed.`);
         }
       } catch (e) {
-        console.error('[sync-discord] Error flagging multiple branches:', e);
+        console.error('[sync-discord] Error flagging branch issue:', e);
       }
     }
     return {
       created: false,
       existed: false,
       flagged: true,
-      reason: 'Multiple branches selected'
+      reason: branchResult.reason
     };
   }
+
+  let forumChannelId = branchResult.channelId;
 
   // Fallback to PROJECTS_CATEGORY_ID if no branch channel configured
   if (!forumChannelId) {

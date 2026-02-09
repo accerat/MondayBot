@@ -67,6 +67,15 @@ export async function handleMondayWebhook(payload, discordClient) {
     // Handle different event types
     switch (event.type) {
       case 'update_column_value':
+        // Special handling for Branch column - may create thread for previously flagged items
+        const columnTitle = event.columnTitle || event.column_title || '';
+        if (columnTitle.toLowerCase() === 'branch') {
+          const newThreadId = await handleBranchUpdate(itemId, itemDetails, discordClient);
+          if (newThreadId) {
+            // Thread was just created, no need to post update
+            return;
+          }
+        }
         await handleColumnUpdate(thread, event);
         break;
 
@@ -110,7 +119,8 @@ async function handleColumnUpdate(thread, event) {
     'Survey Assignment': 'Surveyor',
     'Ceremony Actual POD': '⚠️ IMPORTANT END BY DATE',
     'Material Notes': 'Material Updates',
-    'UHC Comments': 'Becka Notes'
+    'UHC Comments': 'Becka Notes',
+    'Branch': 'Branch'
   };
 
   const displayName = columnMapping[columnTitle] || columnTitle;
@@ -135,6 +145,32 @@ async function handleColumnUpdate(thread, event) {
 
   await thread.send(message);
   console.log(`[Webhook] Posted column update to thread ${thread.id}`);
+}
+
+/**
+ * Handle Branch column update specially - may need to create thread for previously flagged items
+ */
+async function handleBranchUpdate(itemId, itemDetails, discordClient) {
+  // Check if thread already exists
+  const existingThread = await getThreadId(itemId);
+  if (existingThread) {
+    // Thread exists, normal column update will handle it
+    return null;
+  }
+
+  // No thread yet - check if branch is now valid
+  const branchInfo = getBranchChannel(itemDetails);
+
+  if (!branchInfo.flagged) {
+    // Branch is now valid! Create the thread
+    console.log(`[Webhook] Branch updated to valid value for item ${itemId}, creating thread now`);
+    const threadId = await createDiscordThread(itemId, itemDetails, discordClient);
+    return threadId;
+  }
+
+  // Still flagged - re-flag with updated reason
+  await flagBranchIssue(itemId, itemDetails, branchInfo.reason, discordClient);
+  return null;
 }
 
 /**
@@ -214,62 +250,22 @@ function getStatusEmoji(status) {
 }
 
 /**
- * Check if an item should be synced to Discord based on column values
- * Only sync if:
- * - "Mason/Carp" column contains "team mlb" (case insensitive)
- * - OR "Survey Assignment" column contains "nick phelps" (case insensitive)
+ * Check if an item should be synced to Discord
+ * Now syncs ALL items (no filtering by Mason/Carp or Survey Assignment)
  */
 async function checkIfItemShouldSync(itemId, item = null) {
-  try {
-    // If item not provided, fetch it
-    if (!item) {
-      item = await getItem(itemId);
-    }
-
-    if (!item || !item.column_values) {
-      console.log(`[Webhook] Could not get item details for ${itemId}`);
-      return false;
-    }
-
-    // Find the relevant columns
-    const masonCarpColumn = item.column_values.find(col =>
-      col.title && col.title.toLowerCase().includes('mason') && col.title.toLowerCase().includes('carp')
-    );
-
-    const surveyAssignmentColumn = item.column_values.find(col =>
-      col.title && col.title.toLowerCase() === 'survey assignment'
-    );
-
-    // Check if "Mason/Carp" contains "team mlb"
-    if (masonCarpColumn) {
-      const masonCarpValue = (masonCarpColumn.text || '').toLowerCase();
-      if (masonCarpValue.includes('team mlb')) {
-        console.log(`[Webhook] Item ${itemId} matches: Mason/Carp = "${masonCarpColumn.text}"`);
-        return true;
-      }
-    }
-
-    // Check if "Survey Assignment" contains "nick phelps"
-    if (surveyAssignmentColumn) {
-      const surveyValue = (surveyAssignmentColumn.text || '').toLowerCase();
-      if (surveyValue.includes('nick phelps')) {
-        console.log(`[Webhook] Item ${itemId} matches: Survey Assignment = "${surveyAssignmentColumn.text}"`);
-        return true;
-      }
-    }
-
-    console.log(`[Webhook] Item ${itemId} does not match sync criteria`);
-    return false;
-  } catch (error) {
-    console.error(`[Webhook] Error checking sync criteria for item ${itemId}:`, error);
-    // On error, default to syncing (fail open)
-    return true;
-  }
+  // Always sync all items
+  return true;
 }
 
 /**
  * Determine the target Discord channel based on the Branch column value.
- * Returns { channelId, flagged, values } where flagged=true means multiple branches selected.
+ * Returns { channelId, flagged, values, reason } where flagged=true means item needs attention.
+ *
+ * Flagged cases (no thread created):
+ * - Empty/missing branch value
+ * - Multiple branches selected
+ * - Unrecognized branch value (not ESS or OPD)
  */
 function getBranchChannel(itemDetails) {
   const branchCol = itemDetails.column_values?.find(col =>
@@ -277,31 +273,33 @@ function getBranchChannel(itemDetails) {
   );
 
   if (!branchCol || !branchCol.text || branchCol.text.trim() === '') {
-    // No branch set - use default
-    return { channelId: process.env.DEFAULT_CHANNEL_ID || process.env.PROJECTS_CATEGORY_ID, flagged: false, values: [] };
+    // No branch set - flag it
+    return { channelId: null, flagged: true, values: [], reason: 'No branch selected' };
   }
 
   // Monday dropdown text is comma-separated when multiple values are selected
   const values = branchCol.text.split(',').map(v => v.trim()).filter(Boolean);
 
   if (values.length > 1) {
-    return { channelId: null, flagged: true, values };
+    return { channelId: null, flagged: true, values, reason: 'Multiple branches selected' };
   }
 
   const branch = values[0].toLowerCase();
   if (branch === 'ess') {
-    return { channelId: process.env.ESS_CHANNEL_ID, flagged: false, values };
+    return { channelId: process.env.ESS_CHANNEL_ID, flagged: false, values, reason: null };
   } else if (branch === 'opd') {
-    return { channelId: process.env.OPD_CHANNEL_ID, flagged: false, values };
+    return { channelId: process.env.OPD_CHANNEL_ID, flagged: false, values, reason: null };
   } else {
-    return { channelId: process.env.DEFAULT_CHANNEL_ID || process.env.PROJECTS_CATEGORY_ID, flagged: false, values };
+    // Unrecognized branch value - flag it
+    return { channelId: null, flagged: true, values, reason: `Unrecognized branch: "${values[0]}"` };
   }
 }
 
 /**
- * Flag an item with multiple branch values to the MLB office channel.
+ * Flag an item that needs branch attention to the MLB office channel.
+ * Reasons: empty branch, multiple branches, unrecognized branch value
  */
-async function flagMultipleBranches(itemId, itemDetails, discordClient) {
+async function flagBranchIssue(itemId, itemDetails, reason, discordClient) {
   try {
     const flagChannelId = process.env.FLAG_CHANNEL_ID;
     if (!flagChannelId) {
@@ -318,13 +316,13 @@ async function flagMultipleBranches(itemId, itemDetails, discordClient) {
     const branchCol = itemDetails.column_values?.find(col =>
       col.title && col.title.toLowerCase() === 'branch'
     );
-    const branchValues = branchCol?.text || 'Unknown';
+    const branchValues = branchCol?.text || '(empty)';
     const itemName = itemDetails.name || `Item ${itemId}`;
 
-    const message = `⚠️ **Branch Conflict** - Item "${itemName}" (ID: \`${itemId}\`) has multiple branches selected: **${branchValues}**. Please fix this in Monday.com so it can be routed to the correct channel.`;
+    const message = `⚠️ **Branch Issue** - Item "${itemName}" (ID: \`${itemId}\`)\n**Reason:** ${reason}\n**Current Branch Value:** ${branchValues}\n\nPlease set a valid branch (ESS or OPD) in Monday.com. The Discord thread will be created automatically once fixed.`;
 
     await channel.send(message);
-    console.log(`[Webhook] Flagged item ${itemId} for multiple branches: ${branchValues}`);
+    console.log(`[Webhook] Flagged item ${itemId}: ${reason}`);
   } catch (error) {
     console.error(`[Webhook] Error flagging item ${itemId}:`, error);
   }
@@ -339,8 +337,8 @@ async function createDiscordThread(itemId, itemDetails, discordClient) {
     const branchInfo = getBranchChannel(itemDetails);
 
     if (branchInfo.flagged) {
-      console.log(`[Webhook] Item ${itemId} has multiple branches (${branchInfo.values.join(', ')}), flagging instead of creating thread`);
-      await flagMultipleBranches(itemId, itemDetails, discordClient);
+      console.log(`[Webhook] Item ${itemId} flagged: ${branchInfo.reason}`);
+      await flagBranchIssue(itemId, itemDetails, branchInfo.reason, discordClient);
       return null;
     }
 

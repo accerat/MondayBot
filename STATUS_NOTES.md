@@ -1,27 +1,56 @@
 # MondayBot Status Notes
 
-**Last Updated:** 2026-02-08
+**Last Updated:** 2026-02-09
 
 ---
 
-## CURRENT STATUS: Fully Working
+## CURRENT STATUS: Updated - Needs Deploy
 
-MondayBot is deployed and running on AWS. All features are implemented and tested.
+Changes made locally, needs deployment to AWS.
 
 ---
 
 ## Features Implemented
 
-### 1. Branch-Based Channel Routing (WORKING)
+### 1. Branch-Based Channel Routing (UPDATED 2026-02-09)
 Routes Discord thread creation based on the "Branch" dropdown column in Monday.com:
 - **ESS** → Channel `1456320404330381425` (mlb-2026-ess)
 - **OPD** → Channel `1446176868695937084` (2026-opd-program)
-- **Other/Empty** → Channel `1397270791175012453` (non-walmart-project-reports)
-- **Multiple branches selected** → Flags to Channel `1397271405606998036` (no thread created)
+- **Empty/Other/Unrecognized** → **FLAGGED** to Channel `1397271405606998036` (no thread created)
+- **Multiple branches selected** → **FLAGGED** to Channel `1397271405606998036` (no thread created)
+
+**Flag Message Format:**
+```
+⚠️ **Branch Issue** - Item "Store Name" (ID: `12345`)
+**Reason:** No branch selected / Multiple branches selected / Unrecognized branch: "xyz"
+**Current Branch Value:** (empty) or ESS, OPD
+Please set a valid branch (ESS or OPD) in Monday.com. The Discord thread will be created automatically once fixed.
+```
 
 **Important:** The Branch column ID is `dropdown_mm07kqx` on the MLB 2026 ESS board.
 
-### 2. Slash Commands (WORKING)
+### 2. Automatic Sync - ALL Items (UPDATED 2026-02-09)
+**Removed filtering** - ALL Monday.com items now sync to Discord automatically.
+- Previously: Only synced if "Mason/Carp" contained "team mlb" OR "Survey Assignment" contained "nick phelps"
+- Now: Syncs all items (branch routing determines where/if thread is created)
+
+### 3. Branch Correction Auto-Creates Thread (NEW 2026-02-09)
+When a flagged item has its Branch column updated to a valid value (ESS or OPD):
+- The webhook detects the branch column change
+- Checks if thread exists (it won't for previously flagged items)
+- Automatically creates the thread in the correct channel
+- No manual sync needed!
+
+### 4. Auto-Update on Column Changes (WORKING)
+When columns are updated in Monday.com, Discord thread is updated automatically:
+- WAL Start/End dates
+- Location
+- Contacts
+- Materials
+- Survey Assignment
+- And all other configured columns
+
+### 5. Slash Commands (WORKING)
 All Monday.com commands are on MondayBot (moved from TaskBot):
 - `/monday-sync-projects` - Manually sync Monday.com projects to Discord
 - `/monday-status` - Check bot status and thread mappings
@@ -128,3 +157,10 @@ Ensure MondayBot has `Send Messages` and `Create Public Threads` in the target f
 4. Fixed branch column detection (column ID `dropdown_mm07kqx`)
 5. Fixed permission issue on non-walmart-project-reports channel
 6. All 4 test projects synced correctly to proper channels
+
+## Session History (2026-02-09)
+
+1. **Changed Empty/Other branch handling** - Now flags instead of creating in default channel
+2. **Removed sync filtering** - All items now sync (no Mason/Carp or Nick Phelps filter)
+3. **Added branch correction handling** - When flagged item's branch is fixed, thread auto-creates
+4. **Confirmed auto-updates working** - Column changes in Monday.com auto-post to Discord threads
