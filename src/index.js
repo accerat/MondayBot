@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import fs from 'fs';
 import { initializeWeeklySummary } from './jobs/weeklySummary.js';
+import { initializeDailySync } from './jobs/dailySync.js';
 import { initializeHealthMonitor } from './services/healthMonitor.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -87,6 +88,7 @@ client.once(Events.ClientReady, c => {
 
   // Initialize scheduled jobs and health monitoring
   initializeWeeklySummary(client);
+  initializeDailySync(client);
   initializeHealthMonitor(client);
 });
 
