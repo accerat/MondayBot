@@ -4,9 +4,9 @@
 
 ---
 
-## CURRENT STATUS: Updated - Needs Deploy
+## CURRENT STATUS: Deployed and Running
 
-Changes made locally, needs deployment to AWS.
+All changes deployed to AWS on 2026-02-09.
 
 ---
 
