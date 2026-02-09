@@ -8,13 +8,20 @@
     "start": "node src/index.js",
     "register": "node src/register-commands.js"
   },
-  "keywords": ["discord", "monday.com", "webhook", "sync"],
+  "keywords": [
+    "discord",
+    "monday.com",
+    "webhook",
+    "sync"
+  ],
   "author": "",
   "license": "ISC",
   "dependencies": {
     "discord.js": "^14.14.1",
-    "express": "^4.18.2",
     "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "googleapis": "^171.4.0",
+    "node-cron": "^3.0.3",
     "node-fetch": "^3.3.2"
   }
 }

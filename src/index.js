@@ -6,6 +6,8 @@ import express from 'express';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import fs from 'fs';
+import { initializeWeeklySummary } from './jobs/weeklySummary.js';
+import { initializeHealthMonitor } from './services/healthMonitor.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -82,6 +84,10 @@ client.on(Events.MessageCreate, async message => {
 client.once(Events.ClientReady, c => {
   console.log(`[MondayBot] Logged in as ${c.user.tag}`);
   console.log('[MondayBot] Ready to sync Monday.com and Discord');
+
+  // Initialize scheduled jobs and health monitoring
+  initializeWeeklySummary(client);
+  initializeHealthMonitor(client);
 });
 
 client.login(process.env.BOT_TOKEN);

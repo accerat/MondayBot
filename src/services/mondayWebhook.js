@@ -3,6 +3,8 @@
 
 import { getThreadId, findThreadByMondayId, mapThread } from './threadMapper.js';
 import { getItem, getUserName } from './mondayApi.js';
+import { shouldFlagItem, markItemFlagged, markItemResolved } from './flagTracker.js';
+import { incrementStat } from '../jobs/weeklySummary.js';
 
 /**
  * Handle Monday.com webhook
@@ -165,12 +167,43 @@ async function handleBranchUpdate(itemId, itemDetails, discordClient) {
     // Branch is now valid! Create the thread
     console.log(`[Webhook] Branch updated to valid value for item ${itemId}, creating thread now`);
     const threadId = await createDiscordThread(itemId, itemDetails, discordClient);
+
+    // Post resolution notice to flag channel
+    if (threadId) {
+      await postFlagResolution(itemId, itemDetails, threadId, discordClient);
+    }
+
     return threadId;
   }
 
   // Still flagged - re-flag with updated reason
   await flagBranchIssue(itemId, itemDetails, branchInfo.reason, discordClient);
   return null;
+}
+
+/**
+ * Post resolution notice to flag channel when a flagged item is fixed
+ */
+async function postFlagResolution(itemId, itemDetails, threadId, discordClient) {
+  const flagChannelId = process.env.FLAG_CHANNEL_ID;
+  if (!flagChannelId) return;
+
+  try {
+    const channel = await discordClient.channels.fetch(flagChannelId);
+    if (!channel) return;
+
+    const itemName = itemDetails.name || `Item ${itemId}`;
+    const message = `**Resolved** - Item "${itemName}" (ID: \`${itemId}\`) now has a valid branch. Thread created: <#${threadId}>`;
+
+    await channel.send(message);
+    console.log(`[Webhook] Posted flag resolution notice for item ${itemId}`);
+
+    // Clear from tracking and track stat
+    await markItemResolved(itemId);
+    await incrementStat('flagsResolved');
+  } catch (error) {
+    console.error(`[Webhook] Error posting flag resolution:`, error);
+  }
 }
 
 /**
@@ -232,6 +265,18 @@ async function handleStatusChange(thread, event) {
 
   await thread.send(message);
   console.log(`[Webhook] Posted status change to thread ${thread.id}`);
+
+  // Auto-archive on complete
+  if (statusLabel.toLowerCase().includes('complete') ||
+      statusLabel.toLowerCase().includes('done')) {
+    try {
+      await thread.send(`*Thread archived - project marked complete*`);
+      await thread.setArchived(true);
+      console.log(`[Webhook] Archived thread ${thread.id} - status: ${statusLabel}`);
+    } catch (error) {
+      console.error(`[Webhook] Failed to archive thread:`, error);
+    }
+  }
 }
 
 /**
@@ -301,6 +346,12 @@ function getBranchChannel(itemDetails) {
  */
 async function flagBranchIssue(itemId, itemDetails, reason, discordClient) {
   try {
+    // Check if already flagged for same reason (prevent duplicates)
+    if (!await shouldFlagItem(itemId, reason)) {
+      console.log(`[Webhook] Item ${itemId} already flagged for: ${reason}, skipping`);
+      return;
+    }
+
     const flagChannelId = process.env.FLAG_CHANNEL_ID;
     if (!flagChannelId) {
       console.error('[Webhook] FLAG_CHANNEL_ID not configured');
@@ -319,10 +370,14 @@ async function flagBranchIssue(itemId, itemDetails, reason, discordClient) {
     const branchValues = branchCol?.text || '(empty)';
     const itemName = itemDetails.name || `Item ${itemId}`;
 
-    const message = `⚠️ **Branch Issue** - Item "${itemName}" (ID: \`${itemId}\`)\n**Reason:** ${reason}\n**Current Branch Value:** ${branchValues}\n\nPlease set a valid branch (ESS or OPD) in Monday.com. The Discord thread will be created automatically once fixed.`;
+    const message = `**Branch Issue** - Item "${itemName}" (ID: \`${itemId}\`)\n**Reason:** ${reason}\n**Current Branch Value:** ${branchValues}\n\nPlease set a valid branch (ESS or OPD) in Monday.com. The Discord thread will be created automatically once fixed.`;
 
     await channel.send(message);
     console.log(`[Webhook] Flagged item ${itemId}: ${reason}`);
+
+    // Track that we flagged it
+    await markItemFlagged(itemId, itemName, reason);
+    await incrementStat('itemsFlagged');
   } catch (error) {
     console.error(`[Webhook] Error flagging item ${itemId}:`, error);
   }
@@ -421,6 +476,9 @@ async function createDiscordThread(itemId, itemDetails, discordClient) {
 
     // Map the thread
     await mapThread(itemId, thread.id, threadName);
+
+    // Track stat
+    await incrementStat('threadsCreated');
 
     return thread.id;
   } catch (error) {
