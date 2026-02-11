@@ -149,9 +149,10 @@ export function getBoardIds() {
  * Get all items from ESS boards
  * @param {object} options - Query options
  * @param {Date} [options.createdSince] - Only get items created after this date
+ * @param {boolean} [options.includeAll] - If true, skip Mason/Carp filter (default: false)
  * @returns {Promise<Array>} List of projects
  */
-export async function getESSProjects({ createdSince } = {}) {
+export async function getESSProjects({ createdSince, includeAll = false } = {}) {
   try {
     console.log('[monday] Fetching ESS projects...');
 
@@ -159,6 +160,9 @@ export async function getESSProjects({ createdSince } = {}) {
     const allProjects = [];
 
     for (const boardId of boardIds) {
+      // First, get the Mason/Carp Status column ID for this board
+      const masonCarpColumnId = await getMasonCarpColumnId(boardId);
+
       let cursor = null;
       let hasMore = true;
 
@@ -200,6 +204,16 @@ export async function getESSProjects({ createdSince } = {}) {
           });
         }
 
+        // Filter by Mason/Carp Status (must have a value starting with "MLB")
+        if (!includeAll && masonCarpColumnId) {
+          filteredItems = filteredItems.filter(item => {
+            const masonCarpCol = item.column_values.find(col => col.id === masonCarpColumnId);
+            const value = masonCarpCol?.text || '';
+            // Include only if Mason/Carp Status has a value (not empty)
+            return value.trim() !== '';
+          });
+        }
+
         // Parse and add to results
         for (const item of filteredItems) {
           const project = parseProjectItem(item, board.name);
@@ -212,11 +226,54 @@ export async function getESSProjects({ createdSince } = {}) {
       }
     }
 
-    console.log(`[monday] Fetched ${allProjects.length} ESS projects`);
+    console.log(`[monday] Fetched ${allProjects.length} ESS projects (filtered by Mason/Carp Status)`);
     return allProjects;
   } catch (error) {
     console.error('[monday] Error fetching ESS projects:', error);
     throw error;
+  }
+}
+
+/**
+ * Get the column ID for Mason/Carp Status on a board
+ * Caches the result to avoid repeated API calls
+ */
+const masonCarpColumnCache = {};
+async function getMasonCarpColumnId(boardId) {
+  if (masonCarpColumnCache[boardId]) {
+    return masonCarpColumnCache[boardId];
+  }
+
+  try {
+    const query = `query ($boardId: [ID!]) {
+      boards(ids: $boardId) {
+        columns {
+          id
+          title
+        }
+      }
+    }`;
+
+    const data = await mondayRequest(query, { boardId: [boardId] });
+    const columns = data.boards[0]?.columns || [];
+
+    // Find column with "Mason" or "Carp" in the title
+    const masonCarpCol = columns.find(col =>
+      col.title.toLowerCase().includes('mason') ||
+      col.title.toLowerCase().includes('carp')
+    );
+
+    if (masonCarpCol) {
+      console.log(`[monday] Found Mason/Carp column: "${masonCarpCol.title}" (${masonCarpCol.id}) on board ${boardId}`);
+      masonCarpColumnCache[boardId] = masonCarpCol.id;
+      return masonCarpCol.id;
+    }
+
+    console.log(`[monday] No Mason/Carp column found on board ${boardId}`);
+    return null;
+  } catch (error) {
+    console.error(`[monday] Error finding Mason/Carp column:`, error);
+    return null;
   }
 }
 
