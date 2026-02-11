@@ -143,6 +143,19 @@ http://3.148.164.166:3001/webhook/monday
 
 ---
 
+## Item Filtering (Mason/Carp Status)
+
+The bot only syncs items that have a **Mason/Carp Status** value (e.g., "MLB", "MLB Survey", "MLB pending").
+
+Items with empty Mason/Carp Status are excluded - these are typically internal/template items like "Dura surveys", "Paint codes", etc.
+
+The filter:
+- Auto-detects the column ID by searching for "mason" or "carp" in column titles
+- Caches column IDs to reduce API calls
+- Can be bypassed with `includeAll: true` option if needed
+
+---
+
 ## Branch Routing Logic
 
 | Branch Value | Action |
@@ -223,6 +236,11 @@ TIMEZONE=America/Chicago
 ---
 
 ## Session Notes
+
+### 2026-02-11: Mason/Carp Status Filter
+- Added filter to only sync items with Mason/Carp Status value
+- Excludes internal/template items (empty status like "Dura surveys", "Paint codes")
+- Auto-detects column ID, caches for performance
 
 ### 2026-02-10: Added 6 New Features
 1. **Flag Resolution Notice** - Posts "Resolved" when flagged items are fixed
