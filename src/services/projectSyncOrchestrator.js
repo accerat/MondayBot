@@ -16,10 +16,8 @@ const forumChannelCache = new Map();
  * Determine the target Discord channel based on the Branch column value.
  * Returns { channelId, flagged, reason } where flagged=true means item needs attention.
  *
- * Flagged cases (no thread created):
- * - Empty/missing branch value
- * - Multiple branches selected
- * - Unrecognized branch value (not ESS or OPD)
+ * Since items are pre-filtered by group (non-ESS excluded), we default to ESS channel
+ * unless Branch explicitly says "OPD".
  */
 function getBranchChannelId(projectData) {
   // Known Branch column IDs (dropdown type)
@@ -43,31 +41,37 @@ function getBranchChannelId(projectData) {
     });
   }
 
-  if (!branchCol || !branchCol[1]?.text || branchCol[1].text.trim() === '') {
-    console.log(`[sync] No branch value for "${projectData.name}", flagging`);
-    return { channelId: null, flagged: true, reason: 'No branch selected' };
+  // Get branch value, default to ESS if empty (since non-ESS group is filtered out at API level)
+  const branchText = branchCol?.[1]?.text?.trim() || '';
+
+  if (!branchText) {
+    // No branch set - default to ESS since we filtered out non-ESS group
+    console.log(`[sync] No branch value for "${projectData.name}", defaulting to ESS`);
+    return { channelId: process.env.ESS_CHANNEL_ID, flagged: false, reason: null };
   }
 
-  const branchText = branchCol[1].text;
   console.log(`[sync] Branch for "${projectData.name}": "${branchText}"`);
 
   const values = branchText.split(',').map(v => v.trim()).filter(Boolean);
 
   if (values.length > 1) {
-    // Multiple branches - flag it
-    console.log(`[sync] Multiple branches detected for "${projectData.name}": ${values.join(', ')}`);
-    return { channelId: null, flagged: true, reason: `Multiple branches selected: ${values.join(', ')}` };
+    // Multiple branches - use first one, prefer ESS
+    const hasESS = values.some(v => v.toLowerCase() === 'ess');
+    const hasOPD = values.some(v => v.toLowerCase() === 'opd');
+    if (hasOPD && !hasESS) {
+      return { channelId: process.env.OPD_CHANNEL_ID, flagged: false, reason: null };
+    }
+    // Default to ESS for multiple branches
+    console.log(`[sync] Multiple branches for "${projectData.name}", defaulting to ESS`);
+    return { channelId: process.env.ESS_CHANNEL_ID, flagged: false, reason: null };
   }
 
   const branch = values[0].toLowerCase();
-  if (branch === 'ess') {
-    return { channelId: process.env.ESS_CHANNEL_ID, flagged: false, reason: null };
-  } else if (branch === 'opd') {
+  if (branch === 'opd') {
     return { channelId: process.env.OPD_CHANNEL_ID, flagged: false, reason: null };
   } else {
-    // Unrecognized branch - flag it
-    console.log(`[sync] Unrecognized branch "${values[0]}" for "${projectData.name}", flagging`);
-    return { channelId: null, flagged: true, reason: `Unrecognized branch: "${values[0]}"` };
+    // ESS or any other value - use ESS channel
+    return { channelId: process.env.ESS_CHANNEL_ID, flagged: false, reason: null };
   }
 }
 
@@ -391,20 +395,31 @@ export async function syncProjectToAllSystems(mondayProject, options = {}) {
       try {
         const discordResult = await createDiscordThread(mondayProject, discordClient);
         results.created.discord = discordResult;
+
+        // If flagged (no thread created), don't mark as synced
+        if (discordResult.flagged) {
+          console.log(`[sync] Project ${mondayProject.name} flagged: ${discordResult.reason}, not marking as synced`);
+          results.success = false;
+          return results;
+        }
       } catch (error) {
         console.error('[sync] Discord thread creation failed:', error);
         results.errors.discord = error.message;
       }
     }
 
-    await markProjectSynced(mondayProject.mondayItemId, {
-      projectName: mondayProject.name,
-      sageNumber: mondayProject.sageNumber,
-      created: results.created,
-      errors: results.errors
-    });
+    // Only mark as synced if a thread was actually created or exists
+    const discordResult = results.created.discord;
+    if (discordResult && (discordResult.created || discordResult.existed)) {
+      await markProjectSynced(mondayProject.mondayItemId, {
+        projectName: mondayProject.name,
+        sageNumber: mondayProject.sageNumber,
+        created: results.created,
+        errors: results.errors
+      });
+    }
 
-    results.success = Object.keys(results.errors).length === 0;
+    results.success = Object.keys(results.errors).length === 0 && !discordResult?.flagged;
     console.log(`[sync] Sync completed for ${mondayProject.name}. Success: ${results.success}`);
 
     return results;
