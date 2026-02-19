@@ -50,10 +50,10 @@ Bidirectional sync between Monday.com and Discord:
 
 ## Monday.com Boards
 
-| Board | ID |
-|-------|-----|
-| ESS 2025 | 7059269339 |
-| MLB 2026 ESS | 18392974573 |
+| Board | ID | Status |
+|-------|-----|--------|
+| ESS 2025 | 7059269339 | Not synced (removed) |
+| MLB 2026 ESS | 18392974573 | Active |
 
 ---
 
@@ -147,16 +147,16 @@ http://3.148.164.166:3001/webhook/monday
 
 ---
 
-## Item Filtering (Mason/Carp Status)
+## Item Filtering (Group-Based)
 
-The bot only syncs items that have a **Mason/Carp Status** value (e.g., "MLB", "MLB Survey", "MLB pending").
+The bot uses **Monday.com groups** to filter items:
+- Items in **"MLB non-ESS jobs"** group are **excluded** (not synced)
+- All other items are considered **ESS projects** and synced to ESS channel
+- If Branch column is explicitly "OPD", routes to OPD channel instead
 
-Items with empty Mason/Carp Status are excluded - these are typically internal/template items like "Dura surveys", "Paint codes", etc.
+This filtering happens at the API level - internal/template items in the non-ESS group are never fetched.
 
-The filter:
-- Auto-detects the column ID by searching for "mason" or "carp" in column titles
-- Caches column IDs to reduce API calls
-- Can be bypassed with `includeAll: true` option if needed
+**Note:** Only the 2026 board is synced. 2025 board was removed.
 
 ---
 
@@ -241,10 +241,12 @@ TIMEZONE=America/Chicago
 
 ## Session Notes
 
-### 2026-02-11: Mason/Carp Status Filter
-- Added filter to only sync items with Mason/Carp Status value
-- Excludes internal/template items (empty status like "Dura surveys", "Paint codes")
-- Auto-detects column ID, caches for performance
+### 2026-02-19: Group-Based Filtering
+- Changed from Mason/Carp Status to group-based filtering
+- Excludes items in "MLB non-ESS jobs" group
+- All other items default to ESS channel
+- Removed 2025 board from syncing (only 2026 now)
+- Daily sync no longer flags items - just creates ESS threads
 
 ### 2026-02-10: Added 6 New Features
 1. **Flag Resolution Notice** - Posts "Resolved" when flagged items are fixed
