@@ -59,7 +59,7 @@ async function showSyncResults(interaction, syncResults, totalCount) {
 
 export const data = new SlashCommandBuilder()
   .setName('monday-sync-projects')
-  .setDescription('Sync new Monday.com ESS projects to Discord')
+  .setDescription('Sync new Monday.com ESS projects to Discord (MLB 2026 only)')
   .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
   .addStringOption(option =>
     option
@@ -70,8 +70,7 @@ export const data = new SlashCommandBuilder()
         { name: 'New only (since last sync)', value: 'new' },
         { name: 'Last 24 hours', value: '24h' },
         { name: 'Last 7 days', value: '7d' },
-        { name: 'All time', value: 'all' },
-        { name: 'Test (dry run - no actual changes)', value: 'test' }
+        { name: 'All time', value: 'all' }
       )
   )
   .addIntegerOption(option =>
@@ -99,301 +98,256 @@ export async function execute(interaction, discordClient) {
   try {
     console.log(`[monday-sync] Starting sync in mode: ${mode}`);
 
-    const boardSelectionRow = new ActionRowBuilder()
+    await interaction.editReply({
+      content: `Fetching projects from MLB 2026 ESS...`
+    });
+
+    let createdSince = null;
+    if (mode === '24h') {
+      createdSince = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    } else if (mode === '7d') {
+      createdSince = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    }
+
+    const mondayProjects = await getESSProjects({ createdSince });
+
+    if (mondayProjects.length === 0) {
+      return interaction.editReply({
+        content: `No projects found in MLB 2026 ESS.`
+      });
+    }
+
+    // Filter out projects that already have Discord threads
+    await interaction.editReply({
+      content: `Found ${mondayProjects.length} projects. Checking Discord for existing threads...`
+    });
+
+    // Get all forum channels to check for existing threads
+    const guildId = process.env.GUILD_ID;
+    const guild = await discordClient.guilds.fetch(guildId);
+    await guild.channels.fetch();
+
+    // Find all forum channels we might sync to
+    const forumChannelIds = [
+      process.env.ESS_CHANNEL_ID,
+      process.env.OPD_CHANNEL_ID,
+      process.env.DEFAULT_CHANNEL_ID,
+      process.env.PROJECTS_CATEGORY_ID
+    ].filter(Boolean);
+
+    // Collect all existing thread names from all forums
+    const existingThreadNames = new Set();
+
+    for (const channelId of forumChannelIds) {
+      try {
+        const channel = await discordClient.channels.fetch(channelId);
+        if (channel && channel.isThreadOnly && channel.isThreadOnly()) {
+          const activeThreads = await channel.threads.fetchActive();
+          const archivedThreads = await channel.threads.fetchArchived({ limit: 100 });
+
+          for (const [, thread] of activeThreads.threads) {
+            existingThreadNames.add(thread.name.toLowerCase());
+          }
+          for (const [, thread] of archivedThreads.threads) {
+            existingThreadNames.add(thread.name.toLowerCase());
+          }
+        }
+      } catch (e) {
+        console.log(`[monday-sync] Could not fetch threads from channel ${channelId}:`, e.message);
+      }
+    }
+
+    console.log(`[monday-sync] Found ${existingThreadNames.size} existing threads in Discord`);
+
+    const unsyncedProjects = [];
+    let alreadySyncedCount = 0;
+
+    for (const project of mondayProjects) {
+      // Check mapping file first
+      const existingMapping = await getThreadId(project.mondayItemId);
+      if (existingMapping) {
+        alreadySyncedCount++;
+        continue;
+      }
+
+      // Check if thread exists in Discord by name
+      if (existingThreadNames.has(project.name.toLowerCase())) {
+        alreadySyncedCount++;
+        continue;
+      }
+
+      unsyncedProjects.push(project);
+    }
+
+    if (unsyncedProjects.length === 0) {
+      return interaction.editReply({
+        content: `All ${mondayProjects.length} projects in MLB 2026 ESS are already synced to Discord.`
+      });
+    }
+
+    const projectsToSync = unsyncedProjects.slice(0, limit);
+
+    let message = `**Monday.com Project Sync Preview**\n\n`;
+    message += `Board: **MLB 2026 ESS**\n`;
+    message += `Found ${mondayProjects.length} total projects`;
+    if (createdSince) {
+      message += ` created since ${createdSince.toLocaleDateString()}`;
+    }
+    message += `\n${alreadySyncedCount} already synced, **${unsyncedProjects.length} need syncing**\n`;
+    message += `\nShowing ${projectsToSync.length} projects to sync:\n\n`;
+
+    for (let i = 0; i < Math.min(10, projectsToSync.length); i++) {
+      const p = projectsToSync[i];
+      message += `${i + 1}. **${p.name}**\n`;
+      message += `   Sage: ${p.sageNumber || 'N/A'} | ${p.city}, ${p.state}\n`;
+    }
+
+    if (projectsToSync.length > 10) {
+      message += `\n... and ${projectsToSync.length - 10} more\n`;
+    }
+
+    message += `\n**What would you like to do?**`;
+
+    const row = new ActionRowBuilder()
       .addComponents(
         new ButtonBuilder()
-          .setCustomId('board_2025')
-          .setLabel('2025 ESS only')
+          .setCustomId('sync_all')
+          .setLabel(`Create All (${projectsToSync.length})`)
+          .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+          .setCustomId('sync_select')
+          .setLabel('Select Individual')
           .setStyle(ButtonStyle.Primary),
         new ButtonBuilder()
-          .setCustomId('board_2026')
-          .setLabel('MLB 2026 ESS only')
-          .setStyle(ButtonStyle.Primary),
-        new ButtonBuilder()
-          .setCustomId('board_both')
-          .setLabel('Both boards')
-          .setStyle(ButtonStyle.Success)
+          .setCustomId('sync_cancel')
+          .setLabel('Cancel')
+          .setStyle(ButtonStyle.Secondary)
       );
 
     await interaction.editReply({
-      content: `**Monday.com Project Sync**\n\nWhich board(s) would you like to sync?`,
-      components: [boardSelectionRow]
+      content: message,
+      components: [row]
     });
 
     const filter = i => i.user.id === interaction.user.id;
-    const boardCollector = interaction.channel.createMessageComponentCollector({
+    const actionCollector = interaction.channel.createMessageComponentCollector({
       filter,
-      time: 60000,
-      max: 1
+      time: 60000
     });
 
-    boardCollector.on('collect', async boardInteraction => {
-      const selectedBoards = boardInteraction.customId === 'board_2025' ? ['2025 ESS'] :
-                             boardInteraction.customId === 'board_2026' ? ['MLB 2026 ESS'] :
-                             ['2025 ESS', 'MLB 2026 ESS'];
-
-      await boardInteraction.update({
-        content: `Fetching projects from ${selectedBoards.join(' and ')}...`,
-        components: []
-      });
-
-      let createdSince = null;
-      if (mode === '24h') {
-        createdSince = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      } else if (mode === '7d') {
-        createdSince = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    actionCollector.on('collect', async i => {
+      if (i.customId === 'sync_cancel') {
+        actionCollector.stop();
+        await i.update({
+          content: 'Sync cancelled.',
+          components: []
+        });
+        return;
       }
 
-      const allProjects = await getESSProjects({ createdSince });
-      const mondayProjects = allProjects.filter(p => selectedBoards.includes(p.boardName));
+      if (i.customId === 'sync_all') {
+        actionCollector.stop();
+        await i.update({
+          content: `Creating Discord threads for ${projectsToSync.length} projects...\n\n*This may take a few moments...*`,
+          components: []
+        });
 
-      if (mondayProjects.length === 0) {
-        return boardInteraction.editReply({
-          content: `No projects found in ${selectedBoards.join(' and ')}.`
+        const syncResults = await syncMultipleProjects(projectsToSync, {
+          discordClient: discordClient,
+          createInDiscord: true,
+          force: false
+        });
+
+        await showSyncResults(i, syncResults, projectsToSync.length);
+        return;
+      }
+
+      if (i.customId === 'sync_select') {
+        const selectOptions = projectsToSync.slice(0, 25).map((p, idx) => ({
+          label: p.name.substring(0, 100),
+          value: `project_${idx}`,
+          description: `${p.city}, ${p.state}`.substring(0, 100)
+        }));
+
+        const selectMenu = new ActionRowBuilder()
+          .addComponents(
+            new StringSelectMenuBuilder()
+              .setCustomId('project_select')
+              .setPlaceholder('Select projects to sync')
+              .setMinValues(1)
+              .setMaxValues(selectOptions.length)
+              .addOptions(selectOptions)
+          );
+
+        const confirmRow = new ActionRowBuilder()
+          .addComponents(
+            new ButtonBuilder()
+              .setCustomId('sync_selected')
+              .setLabel('Create Selected')
+              .setStyle(ButtonStyle.Success),
+            new ButtonBuilder()
+              .setCustomId('sync_cancel_2')
+              .setLabel('Cancel')
+              .setStyle(ButtonStyle.Secondary)
+          );
+
+        await i.update({
+          content: `**Select which projects to sync:**\n\n*You can select multiple projects from the dropdown.*`,
+          components: [selectMenu, confirmRow]
         });
       }
 
-      // Filter out projects that already have Discord threads
-      await boardInteraction.editReply({
-        content: `Found ${mondayProjects.length} projects. Checking Discord for existing threads...`,
-        components: []
-      });
+      if (i.customId === 'sync_selected') {
+        const selectedValues = i.message.components[0].components[0].data.values || [];
 
-      // Get all forum channels to check for existing threads
-      const guildId = process.env.GUILD_ID;
-      const guild = await discordClient.guilds.fetch(guildId);
-      await guild.channels.fetch();
-
-      // Find all forum channels we might sync to
-      const forumChannelIds = [
-        process.env.ESS_CHANNEL_ID,
-        process.env.OPD_CHANNEL_ID,
-        process.env.DEFAULT_CHANNEL_ID,
-        process.env.PROJECTS_CATEGORY_ID
-      ].filter(Boolean);
-
-      // Collect all existing thread names from all forums
-      const existingThreadNames = new Set();
-
-      for (const channelId of forumChannelIds) {
-        try {
-          const channel = await discordClient.channels.fetch(channelId);
-          if (channel && channel.isThreadOnly && channel.isThreadOnly()) {
-            const activeThreads = await channel.threads.fetchActive();
-            const archivedThreads = await channel.threads.fetchArchived({ limit: 100 });
-
-            for (const [, thread] of activeThreads.threads) {
-              existingThreadNames.add(thread.name.toLowerCase());
-            }
-            for (const [, thread] of archivedThreads.threads) {
-              existingThreadNames.add(thread.name.toLowerCase());
-            }
-          }
-        } catch (e) {
-          console.log(`[monday-sync] Could not fetch threads from channel ${channelId}:`, e.message);
-        }
-      }
-
-      console.log(`[monday-sync] Found ${existingThreadNames.size} existing threads in Discord`);
-
-      const unsyncedProjects = [];
-      const alreadySyncedCount = { count: 0 };
-
-      for (const project of mondayProjects) {
-        // Check mapping file first
-        const existingMapping = await getThreadId(project.mondayItemId);
-        if (existingMapping) {
-          alreadySyncedCount.count++;
-          continue;
+        if (selectedValues.length === 0) {
+          await i.reply({
+            content: 'No projects selected. Please select at least one project.',
+            flags: 64
+          });
+          return;
         }
 
-        // Check if thread exists in Discord by name
-        if (existingThreadNames.has(project.name.toLowerCase())) {
-          alreadySyncedCount.count++;
-          continue;
-        }
+        actionCollector.stop();
 
-        unsyncedProjects.push(project);
-      }
-
-      if (unsyncedProjects.length === 0) {
-        return boardInteraction.editReply({
-          content: `All ${mondayProjects.length} projects in ${selectedBoards.join(' and ')} are already synced to Discord.`
+        const selectedProjects = selectedValues.map(val => {
+          const idx = parseInt(val.replace('project_', ''));
+          return projectsToSync[idx];
         });
+
+        await i.update({
+          content: `Creating Discord threads for ${selectedProjects.length} selected projects...\n\n*This may take a few moments...*`,
+          components: []
+        });
+
+        const syncResults = await syncMultipleProjects(selectedProjects, {
+          discordClient: discordClient,
+          createInDiscord: true,
+          force: false
+        });
+
+        await showSyncResults(i, syncResults, selectedProjects.length);
+        return;
       }
 
-      const projectsToSync = unsyncedProjects.slice(0, limit);
-
-      let message = `**Monday.com Project Sync Preview**\n\n`;
-      message += `Board(s): **${selectedBoards.join(', ')}**\n`;
-      message += `Found ${mondayProjects.length} total projects`;
-      if (createdSince) {
-        message += ` created since ${createdSince.toLocaleDateString()}`;
-      }
-      message += `\n${alreadySyncedCount.count} already synced, **${unsyncedProjects.length} need syncing**\n`;
-      message += `\nShowing ${projectsToSync.length} projects to sync:\n\n`;
-
-      for (let i = 0; i < Math.min(10, projectsToSync.length); i++) {
-        const p = projectsToSync[i];
-        message += `${i + 1}. **${p.name}**\n`;
-        message += `   Board: ${p.boardName} | Sage: ${p.sageNumber || 'N/A'} | ${p.city}, ${p.state}\n`;
+      if (i.customId === 'sync_cancel_2') {
+        actionCollector.stop();
+        await i.update({
+          content: 'Sync cancelled.',
+          components: []
+        });
+        return;
       }
 
-      if (projectsToSync.length > 10) {
-        message += `\n... and ${projectsToSync.length - 10} more\n`;
+      if (i.customId === 'project_select') {
+        await i.deferUpdate();
       }
-
-      message += `\n**What would you like to do?**`;
-
-      const row = new ActionRowBuilder()
-        .addComponents(
-          new ButtonBuilder()
-            .setCustomId('sync_all')
-            .setLabel(`Create All (${projectsToSync.length})`)
-            .setStyle(ButtonStyle.Success),
-          new ButtonBuilder()
-            .setCustomId('sync_select')
-            .setLabel('Select Individual')
-            .setStyle(ButtonStyle.Primary),
-          new ButtonBuilder()
-            .setCustomId('sync_cancel')
-            .setLabel('Cancel')
-            .setStyle(ButtonStyle.Secondary)
-        );
-
-      await boardInteraction.editReply({
-        content: message,
-        components: [row]
-      });
-
-      const actionCollector = interaction.channel.createMessageComponentCollector({
-        filter,
-        time: 60000
-      });
-
-      actionCollector.on('collect', async i => {
-        if (i.customId === 'sync_cancel') {
-          actionCollector.stop();
-          await i.update({
-            content: 'Sync cancelled.',
-            components: []
-          });
-          return;
-        }
-
-        if (i.customId === 'sync_all') {
-          actionCollector.stop();
-          await i.update({
-            content: `Creating Discord threads for ${projectsToSync.length} projects...\n\n*This may take a few moments...*`,
-            components: []
-          });
-
-          const syncResults = await syncMultipleProjects(projectsToSync, {
-            discordClient: discordClient,
-            createInDiscord: true,
-            force: false
-          });
-
-          await showSyncResults(i, syncResults, projectsToSync.length);
-          return;
-        }
-
-        if (i.customId === 'sync_select') {
-          const selectOptions = projectsToSync.slice(0, 25).map((p, idx) => ({
-            label: p.name.substring(0, 100),
-            value: `project_${idx}`,
-            description: `${p.boardName} | ${p.city}, ${p.state}`.substring(0, 100)
-          }));
-
-          const selectMenu = new ActionRowBuilder()
-            .addComponents(
-              new StringSelectMenuBuilder()
-                .setCustomId('project_select')
-                .setPlaceholder('Select projects to sync')
-                .setMinValues(1)
-                .setMaxValues(selectOptions.length)
-                .addOptions(selectOptions)
-            );
-
-          const confirmRow = new ActionRowBuilder()
-            .addComponents(
-              new ButtonBuilder()
-                .setCustomId('sync_selected')
-                .setLabel('Create Selected')
-                .setStyle(ButtonStyle.Success),
-              new ButtonBuilder()
-                .setCustomId('sync_cancel_2')
-                .setLabel('Cancel')
-                .setStyle(ButtonStyle.Secondary)
-            );
-
-          await i.update({
-            content: `**Select which projects to sync:**\n\n*You can select multiple projects from the dropdown.*`,
-            components: [selectMenu, confirmRow]
-          });
-        }
-
-        if (i.customId === 'sync_selected') {
-          const selectedValues = i.message.components[0].components[0].data.values || [];
-
-          if (selectedValues.length === 0) {
-            await i.reply({
-              content: 'No projects selected. Please select at least one project.',
-              ephemeral: true
-            });
-            return;
-          }
-
-          actionCollector.stop();
-
-          const selectedProjects = selectedValues.map(val => {
-            const idx = parseInt(val.replace('project_', ''));
-            return projectsToSync[idx];
-          });
-
-          await i.update({
-            content: `Creating Discord threads for ${selectedProjects.length} selected projects...\n\n*This may take a few moments...*`,
-            components: []
-          });
-
-          const syncResults = await syncMultipleProjects(selectedProjects, {
-            discordClient: discordClient,
-            createInDiscord: true,
-            force: false
-          });
-
-          await showSyncResults(i, syncResults, selectedProjects.length);
-          return;
-        }
-
-        if (i.customId === 'sync_cancel_2') {
-          actionCollector.stop();
-          await i.update({
-            content: 'Sync cancelled.',
-            components: []
-          });
-          return;
-        }
-
-        if (i.customId === 'project_select') {
-          await i.deferUpdate();
-        }
-      });
-
-      actionCollector.on('end', collected => {
-        if (collected.size === 0) {
-          interaction.editReply({
-            content: 'Sync timed out after 60 seconds. Please run the command again.',
-            components: []
-          });
-        }
-      });
     });
 
-    boardCollector.on('end', collected => {
+    actionCollector.on('end', collected => {
       if (collected.size === 0) {
         interaction.editReply({
-          content: 'Board selection timed out after 60 seconds. Please run the command again.',
+          content: 'Sync timed out after 60 seconds. Please run the command again.',
           components: []
         });
       }

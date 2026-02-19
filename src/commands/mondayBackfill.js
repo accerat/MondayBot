@@ -7,36 +7,17 @@ import { getThreadId } from '../services/threadMapper.js';
 
 export const data = new SlashCommandBuilder()
   .setName('monday-backfill')
-  .setDescription('Find Monday.com items missing Discord threads')
-  .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-  .addStringOption(option =>
-    option
-      .setName('board')
-      .setDescription('Which board to check')
-      .setRequired(false)
-      .addChoices(
-        { name: 'MLB 2026 ESS', value: '2026' },
-        { name: '2025 ESS', value: '2025' },
-        { name: 'Both', value: 'both' }
-      )
-  );
+  .setDescription('Find Monday.com items missing Discord threads (MLB 2026 ESS)')
+  .setDefaultMemberPermissions(PermissionFlagsBits.Administrator);
 
 export async function execute(interaction, discordClient) {
   await interaction.deferReply({ flags: 64 });
 
-  const board = interaction.options.getString('board') || 'both';
-
   try {
-    await interaction.editReply({ content: 'Scanning Monday.com boards...' });
+    await interaction.editReply({ content: 'Scanning MLB 2026 ESS board...' });
 
-    // Get all projects
-    const allProjects = await getESSProjects();
-    const boardFilter = board === 'both' ? null :
-                        board === '2026' ? 'MLB 2026 ESS' : '2025 ESS';
-
-    const projects = boardFilter
-      ? allProjects.filter(p => p.boardName === boardFilter)
-      : allProjects;
+    // Get all projects (already filtered to 2026 only)
+    const projects = await getESSProjects();
 
     // Check which ones are missing threads
     const missing = [];
@@ -58,7 +39,7 @@ export async function execute(interaction, discordClient) {
     }
 
     let message = `**Backfill Analysis**\n\n`;
-    message += `**Board(s):** ${board === 'both' ? 'All' : boardFilter}\n`;
+    message += `**Board:** MLB 2026 ESS\n`;
     message += `**Total Items Scanned:** ${projects.length}\n\n`;
 
     message += `**Missing Threads (valid branch):** ${missing.length}\n`;
