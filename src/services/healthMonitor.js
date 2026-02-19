@@ -63,7 +63,8 @@ async function checkMondayAPI() {
       method: 'POST',
       headers: {
         'Authorization': process.env.MONDAY_API_TOKEN,
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        'API-Version': '2024-10'
       },
       body: JSON.stringify({ query: 'query { me { id } }' })
     });
