@@ -5,6 +5,10 @@
   - All JSON data files for all bots
 - **Bot Information:** https://drive.google.com/drive/folders/1hV9U3vtrzxu3RNN5lFfvRBHUX6C7bBA3
   - bot-capabilities.md - shared documentation of all bot features
+- **AIBot Knowledge Base:** SQLite database with company Q&A, training materials, and Google Drive docs
+  - Location: AIBot's `data/aibot.db`
+  - Syncs from Google Drive: Worker Resources folder, Skill Training folder
+  - See AIBot's CLAUDE.md for full schema and API details
 
 ---
 

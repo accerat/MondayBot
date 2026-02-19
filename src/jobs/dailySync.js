@@ -34,10 +34,11 @@ export async function runDailySync(client) {
   const flagChannelId = process.env.FLAG_CHANNEL_ID;
 
   console.log('[daily-sync] Fetching all Monday.com projects...');
+  // getESSProjects() now only returns items NOT in "MLB non-ESS jobs" group
+  // These are all ESS projects by definition
   const allProjects = await getESSProjects();
 
   const created = [];
-  const flagged = [];
   const errors = [];
 
   for (const project of allProjects) {
@@ -46,20 +47,17 @@ export async function runDailySync(client) {
       const existingMapping = await getThreadId(project.mondayItemId);
       if (existingMapping) continue;
 
-      // Check branch value
+      // All items from getESSProjects() are ESS (non-ESS group is filtered out)
+      // Check branch column - if OPD, use OPD channel; otherwise default to ESS
       const branch = project.rawColumns?.dropdown_mm07kqx?.text || '';
       const branchLower = branch.toLowerCase();
+      const effectiveBranch = branchLower === 'opd' ? 'opd' : 'ess';
 
-      if (branchLower === 'ess' || branchLower === 'opd') {
-        // Valid branch - create thread
-        const threadId = await createThreadForProject(project, client);
-        if (threadId) {
-          created.push({ name: project.name, threadId, branch: branchLower });
-          await incrementStat('threadsCreated');
-        }
-      } else {
-        // Invalid/missing branch - track for report
-        flagged.push({ name: project.name, branch: branch || '(empty)' });
+      // Create thread
+      const threadId = await createThreadForProject(project, effectiveBranch, client);
+      if (threadId) {
+        created.push({ name: project.name, threadId, branch: effectiveBranch });
+        await incrementStat('threadsCreated');
       }
     } catch (error) {
       console.error(`[daily-sync] Error processing ${project.name}:`, error.message);
@@ -68,21 +66,23 @@ export async function runDailySync(client) {
   }
 
   // Post summary to flag channel if anything happened
-  if (created.length > 0 || flagged.length > 0) {
-    await postDailySyncReport(client, flagChannelId, { created, flagged, errors });
+  if (created.length > 0 || errors.length > 0) {
+    await postDailySyncReport(client, flagChannelId, { created, errors });
   } else {
     console.log('[daily-sync] No new items to sync');
   }
 
-  console.log(`[daily-sync] Complete - Created: ${created.length}, Flagged: ${flagged.length}, Errors: ${errors.length}`);
+  console.log(`[daily-sync] Complete - Created: ${created.length}, Errors: ${errors.length}`);
 }
 
 /**
  * Create a Discord thread for a project
+ * @param {object} project - Project data
+ * @param {string} branch - 'ess' or 'opd'
+ * @param {Client} client - Discord client
  */
-async function createThreadForProject(project, client) {
-  const branch = project.rawColumns?.dropdown_mm07kqx?.text?.toLowerCase() || '';
-  const channelId = branch === 'ess' ? process.env.ESS_CHANNEL_ID : process.env.OPD_CHANNEL_ID;
+async function createThreadForProject(project, branch, client) {
+  const channelId = branch === 'opd' ? process.env.OPD_CHANNEL_ID : process.env.ESS_CHANNEL_ID;
 
   if (!channelId) {
     console.error(`[daily-sync] No channel ID for branch: ${branch}`);
@@ -129,7 +129,7 @@ async function createThreadForProject(project, client) {
 /**
  * Post daily sync report to flag channel
  */
-async function postDailySyncReport(client, channelId, { created, flagged, errors }) {
+async function postDailySyncReport(client, channelId, { created, errors }) {
   if (!channelId) return;
 
   const channel = await client.channels.fetch(channelId);
@@ -139,31 +139,24 @@ async function postDailySyncReport(client, channelId, { created, flagged, errors
 
   if (created.length > 0) {
     message += `**Threads Created:** ${created.length}\n`;
-    for (const item of created.slice(0, 5)) {
+    for (const item of created.slice(0, 10)) {
       message += `- ${item.name} (${item.branch.toUpperCase()})\n`;
     }
-    if (created.length > 5) {
-      message += `- ...and ${created.length - 5} more\n`;
-    }
-    message += '\n';
-  }
-
-  if (flagged.length > 0) {
-    message += `**Missing Valid Branch:** ${flagged.length}\n`;
-    for (const item of flagged.slice(0, 5)) {
-      message += `- ${item.name} (Branch: ${item.branch})\n`;
-    }
-    if (flagged.length > 5) {
-      message += `- ...and ${flagged.length - 5} more\n`;
+    if (created.length > 10) {
+      message += `- ...and ${created.length - 10} more\n`;
     }
     message += '\n';
   }
 
   if (errors.length > 0) {
     message += `**Errors:** ${errors.length}\n`;
-    for (const item of errors.slice(0, 3)) {
+    for (const item of errors.slice(0, 5)) {
       message += `- ${item.name}: ${item.error}\n`;
     }
+  }
+
+  if (created.length === 0 && errors.length === 0) {
+    message += `All projects already synced.`;
   }
 
   await channel.send(message);

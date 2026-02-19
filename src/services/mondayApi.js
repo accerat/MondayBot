@@ -127,9 +127,12 @@ export async function getUserName(userId) {
 
 // Board IDs for ESS projects
 const BOARD_IDS = {
-  ESS_2025: '7059269339',
+  // ESS_2025: '7059269339',  // Removed - no longer syncing 2025
   ESS_2026: '18392974573'  // 2026 mlb ess (new board as of Dec 2025)
 };
+
+// Group name to exclude (items in this group are not ESS)
+const NON_ESS_GROUP_NAME = 'MLB non-ESS jobs';
 
 /**
  * Check if Monday.com is properly configured
@@ -149,24 +152,23 @@ export function getBoardIds() {
  * Get all items from ESS boards
  * @param {object} options - Query options
  * @param {Date} [options.createdSince] - Only get items created after this date
- * @param {boolean} [options.includeAll] - If true, skip Mason/Carp filter (default: false)
+ * @param {boolean} [options.includeNonESS] - If true, include items from "MLB non-ESS jobs" group (default: false)
  * @returns {Promise<Array>} List of projects
  */
-export async function getESSProjects({ createdSince, includeAll = false } = {}) {
+export async function getESSProjects({ createdSince, includeNonESS = false } = {}) {
   try {
-    console.log('[monday] Fetching ESS projects...');
+    console.log('[monday] Fetching ESS projects from 2026 board...');
 
-    const boardIds = [BOARD_IDS.ESS_2025, BOARD_IDS.ESS_2026];
+    // Only sync 2026 board
+    const boardIds = [BOARD_IDS.ESS_2026];
     const allProjects = [];
 
     for (const boardId of boardIds) {
-      // First, get the Mason/Carp Status column ID for this board
-      const masonCarpColumnId = await getMasonCarpColumnId(boardId);
-
       let cursor = null;
       let hasMore = true;
 
       while (hasMore) {
+        // Include group info in the query
         const query = `query ($boardId: [ID!], $cursor: String) {
           boards(ids: $boardId) {
             id
@@ -178,6 +180,10 @@ export async function getESSProjects({ createdSince, includeAll = false } = {}) 
                 name
                 created_at
                 updated_at
+                group {
+                  id
+                  title
+                }
                 column_values {
                   id
                   text
@@ -204,19 +210,21 @@ export async function getESSProjects({ createdSince, includeAll = false } = {}) 
           });
         }
 
-        // Filter by Mason/Carp Status (must have a value starting with "MLB")
-        if (!includeAll && masonCarpColumnId) {
+        // Filter by group - exclude "MLB non-ESS jobs" unless includeNonESS is true
+        if (!includeNonESS) {
           filteredItems = filteredItems.filter(item => {
-            const masonCarpCol = item.column_values.find(col => col.id === masonCarpColumnId);
-            const value = masonCarpCol?.text || '';
-            // Include only if Mason/Carp Status has a value (not empty)
-            return value.trim() !== '';
+            const groupTitle = item.group?.title || '';
+            const isNonESS = groupTitle.toLowerCase().includes('non-ess');
+            return !isNonESS;
           });
         }
 
         // Parse and add to results
         for (const item of filteredItems) {
           const project = parseProjectItem(item, board.name);
+          // Items not in "MLB non-ESS jobs" are ESS by default
+          project.isESS = true;
+          project.groupName = item.group?.title || '';
           allProjects.push(project);
         }
 
@@ -226,54 +234,11 @@ export async function getESSProjects({ createdSince, includeAll = false } = {}) 
       }
     }
 
-    console.log(`[monday] Fetched ${allProjects.length} ESS projects (filtered by Mason/Carp Status)`);
+    console.log(`[monday] Fetched ${allProjects.length} ESS projects (excluding non-ESS group)`);
     return allProjects;
   } catch (error) {
     console.error('[monday] Error fetching ESS projects:', error);
     throw error;
-  }
-}
-
-/**
- * Get the column ID for Mason/Carp Status on a board
- * Caches the result to avoid repeated API calls
- */
-const masonCarpColumnCache = {};
-async function getMasonCarpColumnId(boardId) {
-  if (masonCarpColumnCache[boardId]) {
-    return masonCarpColumnCache[boardId];
-  }
-
-  try {
-    const query = `query ($boardId: [ID!]) {
-      boards(ids: $boardId) {
-        columns {
-          id
-          title
-        }
-      }
-    }`;
-
-    const data = await mondayRequest(query, { boardId: [boardId] });
-    const columns = data.boards[0]?.columns || [];
-
-    // Find column with "Mason" or "Carp" in the title
-    const masonCarpCol = columns.find(col =>
-      col.title.toLowerCase().includes('mason') ||
-      col.title.toLowerCase().includes('carp')
-    );
-
-    if (masonCarpCol) {
-      console.log(`[monday] Found Mason/Carp column: "${masonCarpCol.title}" (${masonCarpCol.id}) on board ${boardId}`);
-      masonCarpColumnCache[boardId] = masonCarpCol.id;
-      return masonCarpCol.id;
-    }
-
-    console.log(`[monday] No Mason/Carp column found on board ${boardId}`);
-    return null;
-  } catch (error) {
-    console.error(`[monday] Error finding Mason/Carp column:`, error);
-    return null;
   }
 }
 
