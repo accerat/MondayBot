@@ -3,7 +3,7 @@
 
 import cron from 'node-cron';
 import { getESSProjects } from '../services/mondayApi.js';
-import { getThreadId, mapThread } from '../services/threadMapper.js';
+import { getThreadId, mapThread, findExistingThreadByName } from '../services/threadMapper.js';
 import { incrementStat } from './weeklySummary.js';
 
 const TZ = process.env.TIMEZONE || 'America/Chicago';
@@ -95,8 +95,15 @@ async function createThreadForProject(project, branch, client) {
     return null;
   }
 
-  // Build thread message
+  // Check if a thread with this name already exists (prevents duplicates)
   const threadName = project.name;
+  const existingThreadId = await findExistingThreadByName(forumChannel, threadName, project.mondayItemId);
+  if (existingThreadId) {
+    console.log(`[daily-sync] Thread already exists for "${threadName}" (${existingThreadId}), mapped instead of creating duplicate`);
+    return existingThreadId;
+  }
+
+  // Build thread message
   let message = `**New Project Synced from Monday.com**\n\n`;
   message += `**${threadName}**\n`;
   message += `Monday.com ID: \`${project.mondayItemId}\`\n`;

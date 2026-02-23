@@ -4,7 +4,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { mapThread, getThreadId } from './threadMapper.js';
+import { mapThread, getThreadId, findExistingThreadByName } from './threadMapper.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -197,17 +197,16 @@ async function createDiscordThread(projectData, discordClient) {
       forum = await findOrCreateForumChannel(guild, forumChannelId, forumName);
     }
 
-    // Check if thread already exists
-    const existingThreads = await forum.threads.fetchActive();
-    const existingThread = existingThreads.threads.find(t => t.name === projectData.name);
-
-    if (existingThread) {
-      console.log(`[sync-discord] Thread already exists: "${projectData.name}"`);
+    // Check if thread already exists (active + archived)
+    const existingThreadId = await findExistingThreadByName(forum, projectData.name, projectData.mondayItemId);
+    if (existingThreadId) {
+      console.log(`[sync-discord] Thread already exists: "${projectData.name}" (${existingThreadId})`);
+      const existingThread = await forum.client.channels.fetch(existingThreadId);
       return {
         created: false,
         existed: true,
-        threadId: existingThread.id,
-        threadUrl: existingThread.url,
+        threadId: existingThreadId,
+        threadUrl: existingThread?.url || null,
         forumName: forum.name
       };
     }

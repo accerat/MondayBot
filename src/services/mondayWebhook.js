@@ -1,7 +1,7 @@
 // src/services/mondayWebhook.js
 // Handles incoming webhooks from Monday.com and posts to Discord
 
-import { getThreadId, findThreadByMondayId, mapThread } from './threadMapper.js';
+import { getThreadId, findThreadByMondayId, findExistingThreadByName, mapThread } from './threadMapper.js';
 import { getItem, getUserName } from './mondayApi.js';
 import { shouldFlagItem, markItemFlagged, markItemResolved } from './flagTracker.js';
 import { incrementStat } from '../jobs/weeklySummary.js';
@@ -410,6 +410,14 @@ async function createDiscordThread(itemId, itemDetails, discordClient) {
       return null;
     }
 
+    // Check if a thread with this name already exists (prevents duplicates from manual creation)
+    const threadName = itemDetails.name || `Monday Item ${itemId}`;
+    const existingThreadId = await findExistingThreadByName(forumChannel, threadName, itemId);
+    if (existingThreadId) {
+      console.log(`[Webhook] Thread already exists for "${threadName}" (${existingThreadId}), mapped instead of creating duplicate`);
+      return existingThreadId;
+    }
+
     // Extract key fields from item details
     const fields = {};
     if (itemDetails.column_values) {
@@ -419,7 +427,6 @@ async function createDiscordThread(itemId, itemDetails, discordClient) {
     }
 
     // Build initial message with all key fields
-    const threadName = itemDetails.name || `Monday Item ${itemId}`;
     let message = `🆕 **New Project Synced from Monday.com**\n\n`;
     message += `**${threadName}**\n`;
     message += `Monday.com ID: \`${itemId}\`\n\n`;

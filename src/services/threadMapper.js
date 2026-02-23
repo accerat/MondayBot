@@ -120,6 +120,42 @@ export async function getMondayItemIdFromThread(threadId) {
 }
 
 /**
+ * Find an existing thread by name in a forum channel (active + archived).
+ * Returns the thread ID if found, null otherwise.
+ * If found, automatically maps it in thread-mapping.json.
+ */
+export async function findExistingThreadByName(forumChannel, threadName, mondayItemId) {
+  try {
+    // Check active threads
+    const activeThreads = await forumChannel.threads.fetchActive();
+    const activeMatch = activeThreads.threads.find(t => t.name === threadName);
+    if (activeMatch) {
+      console.log(`[ThreadMapper] Found existing active thread by name: "${threadName}" (${activeMatch.id})`);
+      if (mondayItemId) {
+        await mapThread(mondayItemId, activeMatch.id, threadName);
+      }
+      return activeMatch.id;
+    }
+
+    // Check archived threads
+    const archivedThreads = await forumChannel.threads.fetchArchived();
+    const archivedMatch = archivedThreads.threads.find(t => t.name === threadName);
+    if (archivedMatch) {
+      console.log(`[ThreadMapper] Found existing archived thread by name: "${threadName}" (${archivedMatch.id})`);
+      if (mondayItemId) {
+        await mapThread(mondayItemId, archivedMatch.id, threadName);
+      }
+      return archivedMatch.id;
+    }
+
+    return null;
+  } catch (error) {
+    console.error(`[ThreadMapper] Error finding thread by name "${threadName}":`, error);
+    return null;
+  }
+}
+
+/**
  * Get all mappings (for debugging)
  */
 export async function getAllMappings() {
