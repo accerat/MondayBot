@@ -333,6 +333,9 @@ export async function getItem(itemId) {
           type
           text
           value
+          ... on MirrorValue {
+            display_value
+          }
         }
       }
     }
@@ -349,7 +352,9 @@ export async function getItem(itemId) {
 
     result.items[0].column_values = result.items[0].column_values.map(col => ({
       ...col,
-      title: columnTitles[col.id] || col.id
+      title: columnTitles[col.id] || col.id,
+      // Mirror columns return data in display_value instead of text
+      text: col.text || col.display_value || ''
     }));
   }
 
