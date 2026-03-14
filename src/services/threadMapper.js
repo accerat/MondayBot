@@ -49,10 +49,32 @@ export async function mapThread(mondayItemId, threadId, projectName) {
   mapping.mappings[mondayItemId] = {
     threadId,
     projectName,
-    mappedAt: new Date().toISOString()
+    mappedAt: new Date().toISOString(),
+    // Preserve existing pinnedMessageId if re-mapping
+    pinnedMessageId: mapping.mappings[mondayItemId]?.pinnedMessageId || null
   };
   await saveMapping(mapping);
   console.log(`[ThreadMapper] Mapped Monday item ${mondayItemId} to Discord thread ${threadId}`);
+}
+
+/**
+ * Get the pinned message ID for a Monday.com item
+ */
+export async function getPinnedMessageId(mondayItemId) {
+  const mapping = await loadMapping();
+  return mapping.mappings[mondayItemId]?.pinnedMessageId || null;
+}
+
+/**
+ * Save the pinned message ID for a Monday.com item
+ */
+export async function savePinnedMessageId(mondayItemId, messageId) {
+  const mapping = await loadMapping();
+  if (mapping.mappings[mondayItemId]) {
+    mapping.mappings[mondayItemId].pinnedMessageId = messageId;
+    await saveMapping(mapping);
+    console.log(`[ThreadMapper] Saved pinned message ${messageId} for item ${mondayItemId}`);
+  }
 }
 
 /**

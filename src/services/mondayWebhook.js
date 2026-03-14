@@ -5,6 +5,7 @@ import { getThreadId, findThreadByMondayId, findExistingThreadByName, mapThread 
 import { getItem, getUserName } from './mondayApi.js';
 import { shouldFlagItem, markItemFlagged, markItemResolved } from './flagTracker.js';
 import { incrementStat } from '../jobs/weeklySummary.js';
+import { buildFieldsFromItemDetails, formatPinnedPost, pinStarterMessage, updatePinnedPost } from './pinnedPostFormatter.js';
 
 /**
  * Handle Monday.com webhook
@@ -78,7 +79,7 @@ export async function handleMondayWebhook(payload, discordClient) {
             return;
           }
         }
-        await handleColumnUpdate(thread, event);
+        await handleColumnUpdate(thread, event, itemId, itemDetails);
         break;
 
       case 'create_update':
@@ -90,7 +91,7 @@ export async function handleMondayWebhook(payload, discordClient) {
         break;
 
       case 'change_status_column_value':
-        await handleStatusChange(thread, event);
+        await handleStatusChange(thread, event, itemId, itemDetails);
         break;
 
       default:
@@ -103,9 +104,9 @@ export async function handleMondayWebhook(payload, discordClient) {
 }
 
 /**
- * Handle column value update
+ * Handle column value update — posts update message AND edits the pinned post
  */
-async function handleColumnUpdate(thread, event) {
+async function handleColumnUpdate(thread, event, itemId, itemDetails) {
   const columnTitle = event.columnTitle || event.column_title || 'Field';
   const newValue = event.value?.label?.text || event.value?.text || event.textValue || 'Updated';
   const previousValue = event.previousValue?.label?.text || event.previousValue?.text || 'N/A';
@@ -145,8 +146,12 @@ async function handleColumnUpdate(thread, event) {
 
   message += `_Updated by ${event.userId || 'Unknown'}_`;
 
+  // 1. Post the regular update message
   await thread.send(message);
   console.log(`[Webhook] Posted column update to thread ${thread.id}`);
+
+  // 2. Edit the pinned post with latest data
+  await updatePinnedPost(thread, itemId, itemDetails);
 }
 
 /**
@@ -254,9 +259,9 @@ async function handleFileUpload(thread, event) {
 }
 
 /**
- * Handle status change
+ * Handle status change — posts update AND edits pinned post
  */
-async function handleStatusChange(thread, event) {
+async function handleStatusChange(thread, event, itemId, itemDetails) {
   const statusLabel = event.value?.label?.text || event.value?.text || 'Unknown';
   const statusColor = event.value?.label?.color || '';
 
@@ -265,6 +270,9 @@ async function handleStatusChange(thread, event) {
 
   await thread.send(message);
   console.log(`[Webhook] Posted status change to thread ${thread.id}`);
+
+  // Update pinned post with latest data
+  await updatePinnedPost(thread, itemId, itemDetails);
 
   // Auto-archive on complete
   if (statusLabel.toLowerCase().includes('complete') ||
@@ -384,7 +392,8 @@ async function flagBranchIssue(itemId, itemDetails, reason, discordClient) {
 }
 
 /**
- * Create a new Discord thread for a Monday.com item
+ * Create a new Discord thread for a Monday.com item.
+ * Uses the rich pinned-post format and pins the starter message.
  */
 async function createDiscordThread(itemId, itemDetails, discordClient) {
   try {
@@ -418,60 +427,9 @@ async function createDiscordThread(itemId, itemDetails, discordClient) {
       return existingThreadId;
     }
 
-    // Extract key fields from item details
-    const fields = {};
-    if (itemDetails.column_values) {
-      itemDetails.column_values.forEach(col => {
-        fields[col.title] = col.text || 'Not set';
-      });
-    }
-
-    // Build initial message with all key fields
-    let message = `🆕 **New Project Synced from Monday.com**\n\n`;
-    message += `**${threadName}**\n`;
-    message += `Monday.com ID: \`${itemId}\`\n\n`;
-    message += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
-
-    // Add key project details
-    if (fields['Start Date'] || fields['End Date']) {
-      message += `📅 **WAL Window:** ${fields['Start Date'] || 'TBD'} → ${fields['End Date'] || 'TBD'}\n`;
-    }
-
-    if (fields['Ceremony Actual POD']) {
-      message += `🚨 **IMPORTANT END BY DATE:** ${fields['Ceremony Actual POD']}\n`;
-      message += `⚠️ **This is the final deadline!** ⚠️\n`;
-    }
-
-    if (fields['Location']) {
-      message += `📍 **Location:** ${fields['Location']}\n`;
-    }
-
-    if (fields['Contact']) {
-      message += `📞 **Walmart Contact:** ${fields['Contact']}\n`;
-    }
-
-    if (fields['Survey Assignment']) {
-      message += `📋 **Surveyor:** ${fields['Survey Assignment']}\n`;
-    }
-
-    if (fields['CTL Notes']) {
-      message += `🔍 **CTL Inspectors:** ${fields['CTL Notes']}\n`;
-    }
-
-    if (fields['Material Quantities']) {
-      message += `📦 **Materials:** ${fields['Material Quantities']}\n`;
-    }
-
-    if (fields['Material Notes']) {
-      message += `📝 **Material Updates:** ${fields['Material Notes']}\n`;
-    }
-
-    if (fields['UHC Comments']) {
-      message += `💬 **Becka Notes:** ${fields['UHC Comments']}\n`;
-    }
-
-    message += `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
-    message += `\n✅ This thread is now synced with Monday.com. Updates here and there will be reflected in both places.`;
+    // Build initial message with all project info using the shared formatter
+    const { fields, values } = buildFieldsFromItemDetails(itemDetails);
+    const message = formatPinnedPost(threadName, itemId, fields, values);
 
     // Create the thread
     const thread = await forumChannel.threads.create({
@@ -483,6 +441,9 @@ async function createDiscordThread(itemId, itemDetails, discordClient) {
 
     // Map the thread
     await mapThread(itemId, thread.id, threadName);
+
+    // Pin the starter message and store its ID
+    await pinStarterMessage(thread, itemId);
 
     // Track stat
     await incrementStat('threadsCreated');

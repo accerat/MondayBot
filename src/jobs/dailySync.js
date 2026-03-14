@@ -2,9 +2,10 @@
 // Daily auto-sync job - creates threads for Monday items missing them
 
 import cron from 'node-cron';
-import { getESSProjects } from '../services/mondayApi.js';
+import { getESSProjects, getItem } from '../services/mondayApi.js';
 import { getThreadId, mapThread, findExistingThreadByName } from '../services/threadMapper.js';
 import { incrementStat } from './weeklySummary.js';
+import { buildFieldsFromItemDetails, formatPinnedPost, pinStarterMessage } from '../services/pinnedPostFormatter.js';
 
 const TZ = process.env.TIMEZONE || 'America/Chicago';
 
@@ -103,21 +104,19 @@ async function createThreadForProject(project, branch, client) {
     return existingThreadId;
   }
 
-  // Build thread message
-  let message = `**New Project Synced from Monday.com**\n\n`;
-  message += `**${threadName}**\n`;
-  message += `Monday.com ID: \`${project.mondayItemId}\`\n`;
-  message += `Board: ${project.boardName}\n\n`;
-
-  if (project.city || project.state) {
-    message += `**Location:** ${project.city}, ${project.state}\n`;
+  // Fetch full item details for the rich pinned post
+  let message;
+  try {
+    const itemDetails = await getItem(project.mondayItemId);
+    const { fields, values } = buildFieldsFromItemDetails(itemDetails);
+    message = formatPinnedPost(threadName, project.mondayItemId, fields, values);
+  } catch (error) {
+    console.error(`[daily-sync] Could not fetch item details for rich post, using basic format:`, error.message);
+    message = `📌 **PROJECT INFO**\n\n**${threadName}**\nMonday.com ID: \`${project.mondayItemId}\`\nBoard: ${project.boardName}\n`;
+    if (project.city || project.state) message += `**Location:** ${project.city}, ${project.state}\n`;
+    if (project.sageNumber) message += `**Sage #:** ${project.sageNumber}\n`;
+    message += `\n*Auto-synced by daily job*`;
   }
-
-  if (project.sageNumber) {
-    message += `**Sage #:** ${project.sageNumber}\n`;
-  }
-
-  message += `\n*Auto-synced by daily job*`;
 
   // Create thread
   const thread = await forumChannel.threads.create({
@@ -129,6 +128,9 @@ async function createThreadForProject(project, branch, client) {
 
   // Map it
   await mapThread(project.mondayItemId, thread.id, threadName);
+
+  // Pin the starter message
+  await pinStarterMessage(thread, project.mondayItemId);
 
   return thread.id;
 }
