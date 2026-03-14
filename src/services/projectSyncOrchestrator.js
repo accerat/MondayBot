@@ -4,7 +4,9 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { mapThread, getThreadId, findExistingThreadByName } from './threadMapper.js';
+import { mapThread, getThreadId, getAllMappings, findExistingThreadByName } from './threadMapper.js';
+import { getItem } from './mondayApi.js';
+import { buildFieldsFromItemDetails, formatPinnedPost, pinStarterMessage, updatePinnedPost } from './pinnedPostFormatter.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -211,7 +213,16 @@ async function createDiscordThread(projectData, discordClient) {
       };
     }
 
-    const messageContent = formatProjectMessage(projectData);
+    // Fetch full item details for the rich pinned post
+    let messageContent;
+    try {
+      const itemDetails = await getItem(projectData.mondayItemId);
+      const { fields, values } = buildFieldsFromItemDetails(itemDetails);
+      messageContent = formatPinnedPost(projectData.name, projectData.mondayItemId, fields, values);
+    } catch (error) {
+      console.error(`[sync-discord] Could not fetch item details for rich post, using basic format:`, error.message);
+      messageContent = formatProjectMessage(projectData);
+    }
 
     const thread = await forum.threads.create({
       name: projectData.name,
@@ -223,6 +234,9 @@ async function createDiscordThread(projectData, discordClient) {
 
     // Map the thread
     await mapThread(projectData.mondayItemId, thread.id, projectData.name);
+
+    // Pin the starter message
+    await pinStarterMessage(thread, projectData.mondayItemId);
 
     return {
       created: true,
@@ -444,6 +458,45 @@ export async function syncMultipleProjects(mondayProjects, options = {}) {
   }
 
   return results;
+}
+
+/**
+ * Update all existing pinned posts with fresh data from Monday.com.
+ * Used to refresh posts after formatter changes.
+ */
+export async function updateAllPinnedPosts(discordClient) {
+  const mappings = await getAllMappings();
+  const entries = Object.entries(mappings);
+  let updated = 0;
+  let skipped = 0;
+  let errors = 0;
+
+  console.log(`[sync] Updating pinned posts for ${entries.length} mapped items...`);
+
+  for (const [mondayItemId, data] of entries) {
+    const threadId = data.threadId || data;
+    try {
+      const thread = await discordClient.channels.fetch(threadId);
+      if (!thread) {
+        console.log(`[sync] Thread ${threadId} not found, skipping`);
+        skipped++;
+        continue;
+      }
+
+      await updatePinnedPost(thread, mondayItemId);
+      updated++;
+      console.log(`[sync] Updated ${updated}/${entries.length}: ${data.projectName || mondayItemId}`);
+
+      // Rate limit delay
+      await new Promise(resolve => setTimeout(resolve, 1500));
+    } catch (error) {
+      console.error(`[sync] Error updating pinned post for ${mondayItemId}:`, error.message);
+      errors++;
+    }
+  }
+
+  console.log(`[sync] Pinned post update complete: ${updated} updated, ${skipped} skipped, ${errors} errors`);
+  return { updated, skipped, errors, total: entries.length };
 }
 
 /**
