@@ -315,10 +315,8 @@ async function checkIfItemShouldSync(itemId, item = null) {
  * Determine the target Discord channel based on the Branch column value.
  * Returns { channelId, flagged, values, reason } where flagged=true means item needs attention.
  *
- * Flagged cases (no thread created):
- * - Empty/missing branch value
- * - Multiple branches selected
- * - Unrecognized branch value (not ESS or OPD)
+ * Since items are pre-filtered by group (non-ESS excluded at API level),
+ * empty branch defaults to ESS. Only OPD branch routes elsewhere.
  */
 function getBranchChannel(itemDetails) {
   const branchCol = itemDetails.column_values?.find(col =>
@@ -326,25 +324,29 @@ function getBranchChannel(itemDetails) {
   );
 
   if (!branchCol || !branchCol.text || branchCol.text.trim() === '') {
-    // No branch set - flag it
-    return { channelId: null, flagged: true, values: [], reason: 'No branch selected' };
+    // No branch set - default to ESS (non-ESS group is already filtered out)
+    return { channelId: process.env.ESS_CHANNEL_ID, flagged: false, values: [], reason: null };
   }
 
   // Monday dropdown text is comma-separated when multiple values are selected
   const values = branchCol.text.split(',').map(v => v.trim()).filter(Boolean);
 
   if (values.length > 1) {
-    return { channelId: null, flagged: true, values, reason: 'Multiple branches selected' };
+    // Multiple branches - default to ESS unless only OPD
+    const hasOPD = values.some(v => v.toLowerCase() === 'opd');
+    const hasESS = values.some(v => v.toLowerCase() === 'ess');
+    if (hasOPD && !hasESS) {
+      return { channelId: process.env.OPD_CHANNEL_ID, flagged: false, values, reason: null };
+    }
+    return { channelId: process.env.ESS_CHANNEL_ID, flagged: false, values, reason: null };
   }
 
   const branch = values[0].toLowerCase();
-  if (branch === 'ess') {
-    return { channelId: process.env.ESS_CHANNEL_ID, flagged: false, values, reason: null };
-  } else if (branch === 'opd') {
+  if (branch === 'opd') {
     return { channelId: process.env.OPD_CHANNEL_ID, flagged: false, values, reason: null };
   } else {
-    // Unrecognized branch value - flag it
-    return { channelId: null, flagged: true, values, reason: `Unrecognized branch: "${values[0]}"` };
+    // ESS or any other value - default to ESS
+    return { channelId: process.env.ESS_CHANNEL_ID, flagged: false, values, reason: null };
   }
 }
 
