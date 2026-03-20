@@ -1,11 +1,15 @@
 // src/services/mondayWebhook.js
 // Handles incoming webhooks from Monday.com and posts to Discord
 
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
 import { getThreadId, findThreadByMondayId, findExistingThreadByName, mapThread } from './threadMapper.js';
 import { getItem, getUserName } from './mondayApi.js';
 import { shouldFlagItem, markItemFlagged, markItemResolved } from './flagTracker.js';
 import { incrementStat } from '../jobs/weeklySummary.js';
 import { buildFieldsFromItemDetails, formatPinnedPost, pinStarterMessage, updatePinnedPost } from './pinnedPostFormatter.js';
+import { getDiscordUser } from './crewMapping.js';
+
+const OPS_LEADERSHIP_ID = '1411793485799096490';
 
 /**
  * Handle Monday.com webhook
@@ -83,7 +87,7 @@ export async function handleMondayWebhook(payload, discordClient) {
         break;
 
       case 'create_update':
-        await handleNewUpdate(thread, event);
+        await handleNewUpdate(thread, event, itemId, itemDetails);
         break;
 
       case 'create_file':
@@ -108,8 +112,12 @@ export async function handleMondayWebhook(payload, discordClient) {
  */
 async function handleColumnUpdate(thread, event, itemId, itemDetails) {
   const columnTitle = event.columnTitle || event.column_title || 'Field';
-  const newValue = event.value?.label?.text || event.value?.text || event.textValue || 'Updated';
-  const previousValue = event.previousValue?.label?.text || event.previousValue?.text || 'N/A';
+
+  // Extract value from webhook event — different column types use different structures
+  const newValue = extractColumnValue(event.value, event.textValue) ||
+                   getValueFromItemDetails(itemDetails, columnTitle) ||
+                   'Updated';
+  const previousValue = extractColumnValue(event.previousValue) || 'N/A';
 
   // Map column names to friendly display names
   const columnMapping = {
@@ -144,14 +152,68 @@ async function handleColumnUpdate(thread, event, itemId, itemDetails) {
     message += `\n⚠️ **URGENT: This is the final deadline date!** ⚠️\n`;
   }
 
-  message += `_Updated by ${event.userId || 'Unknown'}_`;
+  // Resolve user name instead of showing raw ID
+  let userName = 'Unknown';
+  if (event.userId) {
+    userName = await getUserName(event.userId);
+  }
+  message += `_Updated by ${userName}_`;
 
   // 1. Post the regular update message
   await thread.send(message);
   console.log(`[Webhook] Posted column update to thread ${thread.id}`);
 
-  // 2. Edit the pinned post with latest data
-  await updatePinnedPost(thread, itemId, itemDetails);
+  // 2. Edit the pinned post with latest data — re-fetch fresh to ensure mirror columns are current
+  await updatePinnedPost(thread, itemId);
+}
+
+/**
+ * Extract a display value from a Monday.com webhook column value object.
+ * Different column types send data in different structures.
+ */
+function extractColumnValue(val, textValue) {
+  if (!val && !textValue) return null;
+
+  // Direct text value from event
+  if (textValue) return textValue;
+
+  // Status/label columns: { label: { text: "Done" } }
+  if (val?.label?.text) return val.label.text;
+
+  // Text columns: { text: "value" } or plain string in value
+  if (val?.text) return val.text;
+
+  // Dropdown columns: { chosenValues: [{ id, name }] }
+  if (val?.chosenValues?.length) {
+    return val.chosenValues.map(v => v.name).join(', ');
+  }
+
+  // Date columns: { date: "2026-03-10" }
+  if (val?.date) return val.date;
+
+  // Person columns: { personsAndTeams: [{ id, kind }] }
+  if (val?.personsAndTeams?.length) {
+    return val.personsAndTeams.map(p => p.name || `User ${p.id}`).join(', ');
+  }
+
+  // Link columns: { url: "...", text: "..." }
+  if (val?.url) return val.text || val.url;
+
+  // If value is a plain string
+  if (typeof val === 'string' && val.trim()) return val.trim();
+
+  return null;
+}
+
+/**
+ * Get the current value of a column from pre-fetched item details as a fallback.
+ */
+function getValueFromItemDetails(itemDetails, columnTitle) {
+  if (!itemDetails?.column_values) return null;
+  const col = itemDetails.column_values.find(c =>
+    (c.title || '').toLowerCase() === columnTitle.toLowerCase()
+  );
+  return col?.text || col?.display_value || null;
 }
 
 /**
@@ -212,9 +274,9 @@ async function postFlagResolution(itemId, itemDetails, threadId, discordClient) 
 }
 
 /**
- * Handle new update/comment
+ * Handle new update/comment — posts to Discord, pings foreman + ops leadership, adds Reply button
  */
-async function handleNewUpdate(thread, event) {
+async function handleNewUpdate(thread, event, itemId, itemDetails) {
   // Get author name - first try direct fields, then look up by userId
   let author = event.userName ||
                event.user_name ||
@@ -235,10 +297,43 @@ async function handleNewUpdate(thread, event) {
 
   const updateText = event.textBody || event.body || event.text_body || 'No content';
 
-  const message = `💬 **New Comment from ${author}**\n` +
-                  `>>> ${updateText}`;
+  // Build mention string — ping foreman (from Crew column) + ops leadership
+  let mentions = '';
+  let crewWarning = '';
+  try {
+    const crewCol = itemDetails?.column_values?.find(c =>
+      (c.title || '').toLowerCase() === 'crew'
+    );
+    const crewName = crewCol?.text;
+    if (crewName) {
+      const foremanId = getDiscordUser(crewName);
+      if (foremanId) {
+        mentions += `<@${foremanId}> `;
+      } else {
+        crewWarning = `\n⚠️ _No Discord link for crew "${crewName}" — foreman was not notified_`;
+      }
+    } else {
+      crewWarning = `\n⚠️ _No crew assigned — foreman was not notified_`;
+    }
+  } catch (err) {
+    console.error('[Webhook] Error looking up foreman:', err.message);
+  }
+  mentions += `<@${OPS_LEADERSHIP_ID}>`;
 
-  await thread.send(message);
+  // Reply button so foremen can respond back to Monday.com
+  const replyButton = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`monday_reply_${itemId}`)
+      .setLabel('Reply to Monday.com')
+      .setStyle(ButtonStyle.Primary)
+      .setEmoji('💬')
+  );
+
+  const message = `💬 **New Comment from ${author}**\n` +
+                  `>>> ${updateText}\n\n` +
+                  mentions + crewWarning;
+
+  await thread.send({ content: message, components: [replyButton] });
   console.log(`[Webhook] Posted comment to thread ${thread.id}: "${updateText.substring(0, 50)}..." from ${author}`);
 }
 
@@ -271,8 +366,8 @@ async function handleStatusChange(thread, event, itemId, itemDetails) {
   await thread.send(message);
   console.log(`[Webhook] Posted status change to thread ${thread.id}`);
 
-  // Update pinned post with latest data
-  await updatePinnedPost(thread, itemId, itemDetails);
+  // Update pinned post with latest data — re-fetch fresh
+  await updatePinnedPost(thread, itemId);
 
   // Auto-archive on complete
   if (statusLabel.toLowerCase().includes('complete') ||

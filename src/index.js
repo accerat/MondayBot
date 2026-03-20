@@ -1,7 +1,7 @@
 // src/index.js
 // MondayBot - Bidirectional sync between Monday.com and Discord
 import 'dotenv/config';
-import { Client, GatewayIntentBits, Events, Partials } from 'discord.js';
+import { Client, GatewayIntentBits, Events, Partials, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder } from 'discord.js';
 import express from 'express';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -9,6 +9,8 @@ import fs from 'fs';
 import { initializeWeeklySummary } from './jobs/weeklySummary.js';
 import { initializeDailySync } from './jobs/dailySync.js';
 import { initializeHealthMonitor } from './services/healthMonitor.js';
+import { initializeCrewMapping } from './services/crewMapping.js';
+import { addUpdate } from './services/mondayApi.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -37,30 +39,83 @@ for (const file of commandFiles) {
   }
 }
 
-// Handle slash commands
+// Handle slash commands, buttons, and modals
 client.on(Events.InteractionCreate, async interaction => {
-  if (!interaction.isChatInputCommand()) return;
+  // --- Slash commands ---
+  if (interaction.isChatInputCommand()) {
+    const command = commandMap.get(interaction.commandName);
+    if (!command) return;
 
-  const command = commandMap.get(interaction.commandName);
-  if (!command) return;
-
-  try {
-    await command.execute(interaction, client);
-  } catch (error) {
-    console.error('[MondayBot] Command error:', error);
     try {
-      const errorMessage = {
-        content: 'An error occurred while executing this command.',
-        flags: 64 // EPHEMERAL
-      };
-      if (interaction.deferred || interaction.replied) {
-        await interaction.editReply(errorMessage);
-      } else {
-        await interaction.reply(errorMessage);
+      await command.execute(interaction, client);
+    } catch (error) {
+      console.error('[MondayBot] Command error:', error);
+      try {
+        const errorMessage = {
+          content: 'An error occurred while executing this command.',
+          flags: 64 // EPHEMERAL
+        };
+        if (interaction.deferred || interaction.replied) {
+          await interaction.editReply(errorMessage);
+        } else {
+          await interaction.reply(errorMessage);
+        }
+      } catch (replyError) {
+        console.error('[MondayBot] Could not send error reply:', replyError.code);
       }
-    } catch (replyError) {
-      console.error('[MondayBot] Could not send error reply:', replyError.code);
     }
+    return;
+  }
+
+  // --- Reply button → show modal ---
+  if (interaction.isButton() && interaction.customId.startsWith('monday_reply_')) {
+    const itemId = interaction.customId.replace('monday_reply_', '');
+    try {
+      const modal = new ModalBuilder()
+        .setCustomId(`monday_reply_modal_${itemId}`)
+        .setTitle('Reply to Monday.com');
+
+      const replyInput = new TextInputBuilder()
+        .setCustomId('reply_text')
+        .setLabel('Your reply')
+        .setStyle(TextInputStyle.Paragraph)
+        .setPlaceholder('Type your reply here...')
+        .setRequired(true);
+
+      modal.addComponents(new ActionRowBuilder().addComponents(replyInput));
+      await interaction.showModal(modal);
+    } catch (error) {
+      console.error('[MondayBot] Error showing reply modal:', error);
+    }
+    return;
+  }
+
+  // --- Modal submit → forward reply to Monday.com ---
+  if (interaction.isModalSubmit() && interaction.customId.startsWith('monday_reply_modal_')) {
+    const itemId = interaction.customId.replace('monday_reply_modal_', '');
+    const replyText = interaction.fields.getTextInputValue('reply_text');
+
+    try {
+      await interaction.deferReply({ flags: 64 }); // ephemeral
+
+      const updateText = `**From ${interaction.user.displayName} (Discord):**\n${replyText}`;
+      await addUpdate(itemId, updateText);
+
+      await interaction.editReply('✅ Reply posted to Monday.com');
+
+      // Also post the reply visibly in the thread
+      await interaction.channel.send(
+        `💬 **Reply from ${interaction.user.displayName}**\n>>> ${replyText}`
+      );
+
+      console.log(`[MondayBot] Reply forwarded to Monday item ${itemId} from ${interaction.user.displayName}`);
+    } catch (error) {
+      console.error('[MondayBot] Error forwarding reply:', error);
+      try {
+        await interaction.editReply('❌ Failed to post reply to Monday.com');
+      } catch {}
+    }
+    return;
   }
 });
 
@@ -85,6 +140,11 @@ client.on(Events.MessageCreate, async message => {
 client.once(Events.ClientReady, c => {
   console.log(`[MondayBot] Logged in as ${c.user.tag}`);
   console.log('[MondayBot] Ready to sync Monday.com and Discord');
+
+  // Initialize crew mapping (loads from Google Drive)
+  initializeCrewMapping().catch(err =>
+    console.error('[MondayBot] Failed to initialize crew mapping:', err.message)
+  );
 
   // Initialize scheduled jobs and health monitoring
   initializeWeeklySummary(client);
