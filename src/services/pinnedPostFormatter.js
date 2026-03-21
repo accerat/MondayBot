@@ -186,7 +186,16 @@ export async function updatePinnedPost(thread, mondayItemId, itemDetails = null)
     }
 
     if (!pinnedMsgId) {
-      console.log(`[PinnedPost] No pinned message found for item ${mondayItemId}, skipping edit`);
+      // No existing pinned post — create one, pin it, and save the ID
+      console.log(`[PinnedPost] No pinned message found for item ${mondayItemId}, creating new one`);
+      try {
+        const newMsg = await thread.send(newContent);
+        await newMsg.pin();
+        await savePinnedMessageId(mondayItemId, newMsg.id);
+        console.log(`[PinnedPost] Created and pinned new post ${newMsg.id} for item ${mondayItemId}`);
+      } catch (createErr) {
+        console.error(`[PinnedPost] Failed to create pinned post for item ${mondayItemId}:`, createErr.message);
+      }
       return;
     }
 
