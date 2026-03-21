@@ -312,6 +312,33 @@ function parseProjectItem(item, boardName) {
 }
 
 /**
+ * Get recent updates/comments for a Monday.com item
+ * @param {string} itemId - Monday.com item ID
+ * @param {number} limit - Max updates to fetch (default 25)
+ * @returns {Promise<Array>} List of updates with id, text_body, created_at, creator
+ */
+export async function getItemUpdates(itemId, limit = 25) {
+  const query = `
+    query ($itemId: [ID!], $limit: Int!) {
+      items (ids: $itemId) {
+        updates (limit: $limit) {
+          id
+          text_body
+          created_at
+          creator {
+            id
+            name
+          }
+        }
+      }
+    }
+  `;
+
+  const result = await mondayRequest(query, { itemId: [itemId], limit });
+  return result.items[0]?.updates || [];
+}
+
+/**
  * Get item details (to find board ID and column IDs)
  */
 export async function getItem(itemId) {

@@ -10,6 +10,7 @@ import { initializeWeeklySummary } from './jobs/weeklySummary.js';
 import { initializeDailySync } from './jobs/dailySync.js';
 import { initializeHealthMonitor } from './services/healthMonitor.js';
 import { initializeCrewMapping } from './services/crewMapping.js';
+import { initializeCommentReconciler } from './jobs/commentReconciler.js';
 import { addUpdate } from './services/mondayApi.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -150,6 +151,7 @@ client.once(Events.ClientReady, c => {
   initializeWeeklySummary(client);
   initializeDailySync(client);
   initializeHealthMonitor(client);
+  initializeCommentReconciler(client);
 });
 
 client.login(process.env.BOT_TOKEN);
