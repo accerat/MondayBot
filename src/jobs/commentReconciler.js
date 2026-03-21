@@ -8,6 +8,7 @@ import { getAllMappings } from '../services/threadMapper.js';
 import { getItemUpdates } from '../services/mondayApi.js';
 import { getDiscordUser } from '../services/crewMapping.js';
 import { getItem } from '../services/mondayApi.js';
+import { updateAllPinnedPosts } from '../services/projectSyncOrchestrator.js';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
 
 const TZ = process.env.TIMEZONE || 'America/Chicago';
@@ -22,11 +23,19 @@ const LOOKBACK_MS = 25 * 60 * 60 * 1000;
 export function initializeCommentReconciler(client) {
   // Run at midnight CT daily
   cron.schedule('0 0 * * *', async () => {
-    console.log('[comment-reconciler] Running nightly reconciliation...');
+    console.log('[nightly-sync] Running nightly reconciliation...');
     try {
       await reconcileComments(client);
     } catch (error) {
-      console.error('[comment-reconciler] Failed:', error);
+      console.error('[nightly-sync] Comment reconciler failed:', error);
+    }
+
+    console.log('[nightly-sync] Refreshing all pinned posts...');
+    try {
+      const result = await updateAllPinnedPosts(client);
+      console.log(`[nightly-sync] Pinned post refresh: ${result.updated} updated, ${result.skipped} skipped, ${result.errors} errors`);
+    } catch (error) {
+      console.error('[nightly-sync] Pinned post refresh failed:', error);
     }
   }, { timezone: TZ });
 
