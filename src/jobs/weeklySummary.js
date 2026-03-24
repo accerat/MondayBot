@@ -14,7 +14,10 @@ const TZ = process.env.TIMEZONE || 'America/Chicago';
  * @param {Client} client - Discord client
  */
 export function initializeWeeklySummary(client) {
-  // Every Monday at 8 AM
+  if (process.env.SCHEDULER_MODE === 'external') {
+    console.log('[weekly-summary] Skipping local cron (SCHEDULER_MODE=external)');
+    return;
+  }
   cron.schedule('0 8 * * 1', async () => {
     console.log('[weekly-summary] Running scheduled job');
     try {

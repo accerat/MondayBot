@@ -14,7 +14,10 @@ const TZ = process.env.TIMEZONE || 'America/Chicago';
  * @param {Client} client - Discord client
  */
 export function initializeDailySync(client) {
-  // Every day at 7 AM CT (before weekly summary at 8 AM)
+  if (process.env.SCHEDULER_MODE === 'external') {
+    console.log('[daily-sync] Skipping local cron (SCHEDULER_MODE=external)');
+    return;
+  }
   cron.schedule('0 7 * * *', async () => {
     console.log('[daily-sync] Running scheduled job');
     try {

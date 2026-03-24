@@ -12,6 +12,7 @@ import { initializeHealthMonitor } from './services/healthMonitor.js';
 import { initializeCrewMapping } from './services/crewMapping.js';
 import { initializeCommentReconciler } from './jobs/commentReconciler.js';
 import { addUpdate } from './services/mondayApi.js';
+import schedulerRoutes, { setClient as setSchedulerClient } from './http/schedulerRoutes.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -152,6 +153,9 @@ client.once(Events.ClientReady, c => {
   initializeDailySync(client);
   initializeHealthMonitor(client);
   initializeCommentReconciler(client);
+
+  // Set Discord client for scheduler HTTP endpoints
+  setSchedulerClient(client);
 });
 
 client.login(process.env.BOT_TOKEN);
@@ -172,6 +176,9 @@ app.get('/health', (req, res) => {
     timestamp: new Date().toISOString()
   });
 });
+
+// Scheduler endpoints
+app.use('/scheduler', schedulerRoutes);
 
 // Monday.com webhook endpoint
 app.post('/webhook/monday', async (req, res) => {

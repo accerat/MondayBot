@@ -21,7 +21,10 @@ const LOOKBACK_MS = 25 * 60 * 60 * 1000;
  * Initialize the comment reconciler cron job
  */
 export function initializeCommentReconciler(client) {
-  // Run at midnight CT daily
+  if (process.env.SCHEDULER_MODE === 'external') {
+    console.log('[comment-reconciler] Skipping local cron (SCHEDULER_MODE=external)');
+    return;
+  }
   cron.schedule('0 0 * * *', async () => {
     console.log('[nightly-sync] Running nightly reconciliation...');
     try {
