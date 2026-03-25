@@ -10,7 +10,7 @@ export async function execute(interaction) {
   await interaction.deferReply({ ephemeral: true });
 
   try {
-    const result = await updateAllPinnedPosts(interaction.client);
+    const result = await updateAllPinnedPosts(interaction.client, { createIfMissing: true });
     await interaction.editReply(
       `**Pinned Post Refresh Complete**\n` +
       `Updated: ${result.updated}\n` +

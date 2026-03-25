@@ -464,7 +464,7 @@ export async function syncMultipleProjects(mondayProjects, options = {}) {
  * Update all existing pinned posts with fresh data from Monday.com.
  * Used to refresh posts after formatter changes.
  */
-export async function updateAllPinnedPosts(discordClient) {
+export async function updateAllPinnedPosts(discordClient, { createIfMissing = false } = {}) {
   const mappings = await getAllMappings();
   const entries = Object.entries(mappings);
   let updated = 0;
@@ -483,7 +483,7 @@ export async function updateAllPinnedPosts(discordClient) {
         continue;
       }
 
-      await updatePinnedPost(thread, mondayItemId);
+      await updatePinnedPost(thread, mondayItemId, null, { createIfMissing });
       updated++;
       console.log(`[sync] Updated ${updated}/${entries.length}: ${data.projectName || mondayItemId}`);
 

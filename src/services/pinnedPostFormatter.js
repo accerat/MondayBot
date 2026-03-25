@@ -157,7 +157,7 @@ export async function pinStarterMessage(thread, mondayItemId) {
  * @param {string}        mondayItemId  - Monday.com item ID
  * @param {object}        [itemDetails] - Optional pre-fetched item details (avoids extra API call)
  */
-export async function updatePinnedPost(thread, mondayItemId, itemDetails = null) {
+export async function updatePinnedPost(thread, mondayItemId, itemDetails = null, { createIfMissing = false } = {}) {
   try {
     // Use provided details or fetch fresh
     const details = itemDetails || await getItem(mondayItemId);
@@ -186,7 +186,11 @@ export async function updatePinnedPost(thread, mondayItemId, itemDetails = null)
     }
 
     if (!pinnedMsgId) {
-      // No existing pinned post — create one, pin it, and save the ID
+      if (!createIfMissing) {
+        console.log(`[PinnedPost] No pinned message found for item ${mondayItemId}, skipping (createIfMissing=false)`);
+        return;
+      }
+      // Create one, pin it, and save the ID (only via /monday-refresh-posts, not nightly)
       console.log(`[PinnedPost] No pinned message found for item ${mondayItemId}, creating new one`);
       try {
         const newMsg = await thread.send(newContent);
