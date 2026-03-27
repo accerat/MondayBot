@@ -13,6 +13,7 @@ import { initializeCrewMapping } from './services/crewMapping.js';
 import { initializeCommentReconciler } from './jobs/commentReconciler.js';
 import { addUpdate } from './services/mondayApi.js';
 import schedulerRoutes, { setClient as setSchedulerClient } from './http/schedulerRoutes.js';
+import apiRoutes from './http/apiRoutes.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -179,6 +180,9 @@ app.get('/health', (req, res) => {
 
 // Scheduler endpoints
 app.use('/scheduler', schedulerRoutes);
+
+// Cross-bot API endpoints
+app.use('/api', apiRoutes);
 
 // Monday.com webhook endpoint
 app.post('/webhook/monday', async (req, res) => {
