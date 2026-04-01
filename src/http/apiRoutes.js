@@ -3,7 +3,7 @@
 // Used by other bots (e.g. DailyReportBot) to post content to Monday.com
 
 import express from 'express';
-import { addUpdate } from '../services/mondayApi.js';
+import { addUpdate, getItem } from '../services/mondayApi.js';
 import { getMondayItemIdFromThread } from '../services/threadMapper.js';
 
 const router = express.Router();
@@ -73,6 +73,65 @@ router.get('/lookup-monday-id/:threadId', async (req, res) => {
     }
     res.json({ success: true, itemId });
   } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * GET /api/project-dates/:threadId
+ * Returns project timeline/dates for a Discord thread's linked Monday item.
+ * Used by LodgingBot to flag lodging requests outside project dates.
+ */
+router.get('/project-dates/:threadId', async (req, res) => {
+  try {
+    const itemId = await getMondayItemIdFromThread(req.params.threadId);
+    if (!itemId) {
+      return res.status(404).json({ success: false, error: 'No mapping found' });
+    }
+
+    const item = await getItem(itemId);
+    if (!item) {
+      return res.status(404).json({ success: false, error: 'Monday item not found' });
+    }
+
+    // Extract date fields from column values
+    const cols = {};
+    for (const col of item.column_values || []) {
+      cols[col.title] = { text: col.text, value: col.value ? JSON.parse(col.value) : null };
+    }
+
+    // Find timeline column (has from/to)
+    let timeline = null;
+    for (const col of item.column_values || []) {
+      if (col.type === 'timerange' && col.value) {
+        const val = JSON.parse(col.value);
+        if (val.from && val.to) {
+          timeline = { from: val.from, to: val.to };
+          break;
+        }
+      }
+    }
+
+    // Find date columns by title pattern
+    const getDateByTitle = (pattern) => {
+      for (const col of item.column_values || []) {
+        if (pattern.test(col.title) && col.text) return col.text;
+      }
+      return null;
+    };
+
+    res.json({
+      success: true,
+      itemId,
+      projectName: item.name,
+      timeline,
+      uhcCSD: getDateByTitle(/uhc.*csd|uhc.*start/i),
+      walCSD: getDateByTitle(/wal.*csd|wal.*start/i),
+      endDate: getDateByTitle(/end\s*date/i),
+      startDate: getDateByTitle(/start\s*date/i),
+    });
+  } catch (error) {
+    console.error('[API] project-dates error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
