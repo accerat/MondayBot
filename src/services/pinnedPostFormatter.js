@@ -172,51 +172,60 @@ export async function updatePinnedPost(thread, mondayItemId, itemDetails = null,
     // Find the pinned message
     let pinnedMsgId = await getPinnedMessageId(mondayItemId);
 
-    if (!pinnedMsgId) {
-      // Fallback: try the starter message of the forum thread
+    // Try to find an editable message: starter message or saved pinned message
+    let msg = null;
+
+    // First try the starter message (for forum threads, this is the initial post)
+    try {
+      const starterMsg = await thread.fetchStarterMessage();
+      if (starterMsg && starterMsg.author.id === thread.client.user.id) {
+        msg = starterMsg;
+      }
+    } catch {
+      // Not a forum thread or starter message unavailable
+    }
+
+    // Fallback: try fetching by saved pinned message ID (if it's not the thread ID)
+    if (!msg && pinnedMsgId && pinnedMsgId !== thread.id) {
       try {
-        const starterMsg = await thread.fetchStarterMessage();
-        if (starterMsg && starterMsg.author.id === thread.client.user.id) {
-          pinnedMsgId = starterMsg.id;
-          await savePinnedMessageId(mondayItemId, pinnedMsgId);
+        const fetched = await thread.messages.fetch(pinnedMsgId);
+        if (fetched && fetched.author.id === thread.client.user.id) {
+          msg = fetched;
         }
       } catch {
-        // Thread may not be a forum thread (e.g. regular text channel thread)
+        // Message may have been deleted
       }
     }
 
-    if (!pinnedMsgId) {
-      if (!createIfMissing) {
-        console.log(`[PinnedPost] No pinned message found for item ${mondayItemId}, skipping (createIfMissing=false)`);
-        return;
+    if (msg) {
+      await msg.edit(newContent);
+      // Ensure it's pinned
+      if (!msg.pinned) {
+        try { await msg.pin(); } catch {}
       }
-      // Create one, pin it, and save the ID (only via /monday-refresh-posts, not nightly)
-      console.log(`[PinnedPost] No pinned message found for item ${mondayItemId}, creating new one`);
-      try {
-        const newMsg = await thread.send(newContent);
-        await newMsg.pin();
-        await savePinnedMessageId(mondayItemId, newMsg.id);
-        console.log(`[PinnedPost] Created and pinned new post ${newMsg.id} for item ${mondayItemId}`);
-      } catch (createErr) {
-        console.error(`[PinnedPost] Failed to create pinned post for item ${mondayItemId}:`, createErr.message);
+      // Save the correct message ID
+      if (pinnedMsgId !== msg.id) {
+        await savePinnedMessageId(mondayItemId, msg.id);
       }
+      console.log(`[PinnedPost] Updated pinned post for item ${mondayItemId}`);
       return;
     }
 
-    const msg = await thread.messages.fetch(pinnedMsgId);
-    if (!msg) {
-      console.log(`[PinnedPost] Could not fetch message ${pinnedMsgId}`);
+    // No existing message to edit — create a new one if allowed
+    if (!createIfMissing) {
+      console.log(`[PinnedPost] No editable message found for item ${mondayItemId}, skipping (createIfMissing=false)`);
       return;
     }
 
-    // Only edit messages we own
-    if (msg.author.id !== thread.client.user.id) {
-      console.log(`[PinnedPost] Message ${pinnedMsgId} not owned by bot, skipping edit`);
-      return;
+    console.log(`[PinnedPost] No editable message found for item ${mondayItemId}, creating new one`);
+    try {
+      const newMsg = await thread.send(newContent);
+      await newMsg.pin();
+      await savePinnedMessageId(mondayItemId, newMsg.id);
+      console.log(`[PinnedPost] Created and pinned new post ${newMsg.id} for item ${mondayItemId}`);
+    } catch (createErr) {
+      console.error(`[PinnedPost] Failed to create pinned post for item ${mondayItemId}:`, createErr.message);
     }
-
-    await msg.edit(newContent);
-    console.log(`[PinnedPost] Updated pinned post for item ${mondayItemId}`);
   } catch (error) {
     console.error(`[PinnedPost] Error updating pinned post for item ${mondayItemId}:`, error.message);
   }
