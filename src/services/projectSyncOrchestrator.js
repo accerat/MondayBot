@@ -22,6 +22,12 @@ const forumChannelCache = new Map();
  * unless Branch explicitly says "OPD".
  */
 function getBranchChannelId(projectData) {
+  // Non-ESS group items always go to OPD channel
+  if (projectData.isNonESS) {
+    console.log(`[sync] "${projectData.name}" is non-ESS, routing to OPD`);
+    return { channelId: process.env.OPD_CHANNEL_ID, flagged: false, reason: null };
+  }
+
   // Known Branch column IDs (dropdown type)
   // MLB 2026 ESS board: dropdown_mm07kqx
   const branchColumnIds = ['dropdown_mm07kqx'];

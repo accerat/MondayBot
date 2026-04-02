@@ -131,7 +131,7 @@ const BOARD_IDS = {
   ESS_2026: '18392974573'  // 2026 mlb ess (new board as of Dec 2025)
 };
 
-// Group name to exclude (items in this group are not ESS)
+// Group name for non-ESS items (routed to OPD channel instead of ESS)
 const NON_ESS_GROUP_NAME = 'MLB non-ESS jobs';
 
 /**
@@ -149,15 +149,15 @@ export function getBoardIds() {
 }
 
 /**
- * Get all items from ESS boards
+ * Get all items from the 2026 board (ESS and non-ESS).
+ * Each project is tagged with isNonESS based on its group.
  * @param {object} options - Query options
  * @param {Date} [options.createdSince] - Only get items created after this date
- * @param {boolean} [options.includeNonESS] - If true, include items from "MLB non-ESS jobs" group (default: false)
  * @returns {Promise<Array>} List of projects
  */
-export async function getESSProjects({ createdSince, includeNonESS = false } = {}) {
+export async function getESSProjects({ createdSince } = {}) {
   try {
-    console.log('[monday] Fetching ESS projects from 2026 board...');
+    console.log('[monday] Fetching all projects from 2026 board...');
 
     // Only sync 2026 board
     const boardIds = [BOARD_IDS.ESS_2026];
@@ -210,21 +210,13 @@ export async function getESSProjects({ createdSince, includeNonESS = false } = {
           });
         }
 
-        // Filter by group - exclude "MLB non-ESS jobs" unless includeNonESS is true
-        if (!includeNonESS) {
-          filteredItems = filteredItems.filter(item => {
-            const groupTitle = item.group?.title || '';
-            const isNonESS = groupTitle.toLowerCase().includes('non-ess');
-            return !isNonESS;
-          });
-        }
-
-        // Parse and add to results
+        // Parse and add to results — tag each with its group
         for (const item of filteredItems) {
           const project = parseProjectItem(item, board.name);
-          // Items not in "MLB non-ESS jobs" are ESS by default
-          project.isESS = true;
-          project.groupName = item.group?.title || '';
+          const groupTitle = item.group?.title || '';
+          project.isNonESS = groupTitle.toLowerCase().includes('non-ess');
+          project.isESS = !project.isNonESS;
+          project.groupName = groupTitle;
           allProjects.push(project);
         }
 
@@ -234,7 +226,9 @@ export async function getESSProjects({ createdSince, includeNonESS = false } = {
       }
     }
 
-    console.log(`[monday] Fetched ${allProjects.length} ESS projects (excluding non-ESS group)`);
+    const essCount = allProjects.filter(p => p.isESS).length;
+    const nonEssCount = allProjects.filter(p => p.isNonESS).length;
+    console.log(`[monday] Fetched ${allProjects.length} projects (${essCount} ESS, ${nonEssCount} non-ESS)`);
     return allProjects;
   } catch (error) {
     console.error('[monday] Error fetching ESS projects:', error);
@@ -347,6 +341,10 @@ export async function getItem(itemId) {
       items (ids: $itemId) {
         id
         name
+        group {
+          id
+          title
+        }
         board {
           id
           name

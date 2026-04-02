@@ -51,11 +51,11 @@ export async function runDailySync(client) {
       const existingMapping = await getThreadId(project.mondayItemId);
       if (existingMapping) continue;
 
-      // All items from getESSProjects() are ESS (non-ESS group is filtered out)
-      // Check branch column - if OPD, use OPD channel; otherwise default to ESS
+      // Route based on group: non-ESS → OPD channel, ESS → ESS channel
+      // Branch column can override for ESS items that should go to OPD
       const branch = project.rawColumns?.dropdown_mm07kqx?.text || '';
-      const branchLower = branch.toLowerCase();
-      const effectiveBranch = branchLower === 'opd' ? 'opd' : 'ess';
+      const effectiveBranch = project.isNonESS ? 'opd' :
+                              branch.toLowerCase() === 'opd' ? 'opd' : 'ess';
 
       // Create thread
       const threadId = await createThreadForProject(project, effectiveBranch, client);

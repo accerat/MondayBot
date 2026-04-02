@@ -414,12 +414,18 @@ async function checkIfItemShouldSync(itemId, item = null) {
  * empty branch defaults to ESS. Only OPD branch routes elsewhere.
  */
 function getBranchChannel(itemDetails) {
+  // Non-ESS group items always go to OPD channel
+  const groupTitle = itemDetails.group?.title || '';
+  if (groupTitle.toLowerCase().includes('non-ess')) {
+    return { channelId: process.env.OPD_CHANNEL_ID, flagged: false, values: [], reason: null };
+  }
+
   const branchCol = itemDetails.column_values?.find(col =>
     col.title && col.title.toLowerCase() === 'branch'
   );
 
   if (!branchCol || !branchCol.text || branchCol.text.trim() === '') {
-    // No branch set - default to ESS (non-ESS group is already filtered out)
+    // No branch set - default to ESS
     return { channelId: process.env.ESS_CHANNEL_ID, flagged: false, values: [], reason: null };
   }
 
