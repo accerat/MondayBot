@@ -51,10 +51,10 @@ export async function runDailySync(client) {
       const existingMapping = await getThreadId(project.mondayItemId);
       if (existingMapping) continue;
 
-      // Route based on group: non-ESS → OPD channel, ESS → ESS channel
+      // Route based on group: non-ESS → default channel, ESS → ESS channel
       // Branch column can override for ESS items that should go to OPD
       const branch = project.rawColumns?.dropdown_mm07kqx?.text || '';
-      const effectiveBranch = project.isNonESS ? 'opd' :
+      const effectiveBranch = project.isNonESS ? 'default' :
                               branch.toLowerCase() === 'opd' ? 'opd' : 'ess';
 
       // Create thread
@@ -82,11 +82,13 @@ export async function runDailySync(client) {
 /**
  * Create a Discord thread for a project
  * @param {object} project - Project data
- * @param {string} branch - 'ess' or 'opd'
+ * @param {string} branch - 'ess', 'opd', or 'default'
  * @param {Client} client - Discord client
  */
 async function createThreadForProject(project, branch, client) {
-  const channelId = branch === 'opd' ? process.env.OPD_CHANNEL_ID : process.env.ESS_CHANNEL_ID;
+  const channelId = branch === 'opd' ? process.env.OPD_CHANNEL_ID :
+                    branch === 'default' ? process.env.DEFAULT_CHANNEL_ID :
+                    process.env.ESS_CHANNEL_ID;
 
   if (!channelId) {
     console.error(`[daily-sync] No channel ID for branch: ${branch}`);

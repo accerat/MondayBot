@@ -22,10 +22,10 @@ const forumChannelCache = new Map();
  * unless Branch explicitly says "OPD".
  */
 function getBranchChannelId(projectData) {
-  // Non-ESS group items always go to OPD channel
+  // Non-ESS group items go to the default (non-ESS) channel
   if (projectData.isNonESS) {
-    console.log(`[sync] "${projectData.name}" is non-ESS, routing to OPD`);
-    return { channelId: process.env.OPD_CHANNEL_ID, flagged: false, reason: null };
+    console.log(`[sync] "${projectData.name}" is non-ESS, routing to default channel`);
+    return { channelId: process.env.DEFAULT_CHANNEL_ID, flagged: false, reason: null };
   }
 
   // Known Branch column IDs (dropdown type)

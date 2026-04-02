@@ -414,10 +414,10 @@ async function checkIfItemShouldSync(itemId, item = null) {
  * empty branch defaults to ESS. Only OPD branch routes elsewhere.
  */
 function getBranchChannel(itemDetails) {
-  // Non-ESS group items always go to OPD channel
+  // Non-ESS group items go to the default (non-ESS) channel
   const groupTitle = itemDetails.group?.title || '';
   if (groupTitle.toLowerCase().includes('non-ess')) {
-    return { channelId: process.env.OPD_CHANNEL_ID, flagged: false, values: [], reason: null };
+    return { channelId: process.env.DEFAULT_CHANNEL_ID, flagged: false, values: [], reason: null };
   }
 
   const branchCol = itemDetails.column_values?.find(col =>
