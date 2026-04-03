@@ -1,6 +1,8 @@
 // src/services/mondayApi.js
 // Monday.com API client for sending updates from Discord
 
+import sharp from 'sharp';
+
 const MONDAY_API_TOKEN = process.env.MONDAY_API_TOKEN;
 const MONDAY_API_URL = 'https://api.monday.com/v2';
 
@@ -62,10 +64,15 @@ export async function addUpdate(itemId, updateText) {
  * @param {string} fileName - Name for the uploaded file
  */
 export async function uploadFileToUpdate(updateId, fileUrl, fileName) {
-  // Download the file
+  // Download the file and convert to JPEG
   const fileResponse = await fetch(fileUrl);
   if (!fileResponse.ok) throw new Error(`Failed to download file: ${fileResponse.status}`);
-  const fileBuffer = Buffer.from(await fileResponse.arrayBuffer());
+  const rawBuffer = Buffer.from(await fileResponse.arrayBuffer());
+  const fileBuffer = await sharp(rawBuffer).jpeg({ quality: 90 }).toBuffer();
+  // Ensure filename ends with .jpeg
+  if (!/\.jpe?g$/i.test(fileName)) {
+    fileName = fileName.replace(/\.[^.]+$/, '.jpeg') || fileName + '.jpeg';
+  }
 
   // Build multipart form
   const boundary = '----MondayBotUpload' + Date.now();
