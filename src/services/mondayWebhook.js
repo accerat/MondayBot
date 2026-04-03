@@ -297,6 +297,12 @@ async function handleNewUpdate(thread, event, itemId, itemDetails) {
 
   const updateText = event.textBody || event.body || event.text_body || 'No content';
 
+  // Skip updates that originated from Discord or were forwarded by the bot (prevent cycle)
+  if (updateText.includes('(Discord):') || updateText.includes('Photos from Discord')) {
+    console.log(`[Webhook] Skipping comment from Discord (cycle prevention) in thread ${thread.id}`);
+    return;
+  }
+
   // Build mention string — ping foreman (from Crew column) + ops leadership
   let mentions = '';
   let crewWarning = '';
