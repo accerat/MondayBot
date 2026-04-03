@@ -3,7 +3,7 @@
 // Used by other bots (e.g. DailyReportBot) to post content to Monday.com
 
 import express from 'express';
-import { addUpdate, getItem } from '../services/mondayApi.js';
+import { addUpdate, getItem, uploadFileToUpdate } from '../services/mondayApi.js';
 import { getMondayItemIdFromThread } from '../services/threadMapper.js';
 
 const router = express.Router();
@@ -57,6 +57,61 @@ router.post('/forward-to-monday', async (req, res) => {
     });
   } catch (error) {
     console.error('[API] forward-to-monday error:', error);
+    res.status(500).json({ success: false, error: error.message, durationMs: Date.now() - start });
+  }
+});
+
+/**
+ * POST /api/forward-photos-to-monday
+ * Creates an update on a Monday.com item and attaches photos to it.
+ * Body: { itemId: string, body: string, photos: [{ url, name }] }
+ */
+router.post('/forward-photos-to-monday', async (req, res) => {
+  const start = Date.now();
+  try {
+    const { itemId, body, photos } = req.body;
+
+    if (!itemId) {
+      return res.status(400).json({ success: false, error: 'itemId is required' });
+    }
+    if (!photos || photos.length === 0) {
+      return res.status(400).json({ success: false, error: 'photos array is required' });
+    }
+
+    // Create the update first
+    const updateBody = body || `📸 ${photos.length} photo(s) uploaded from Discord`;
+    const update = await addUpdate(itemId, updateBody);
+    const updateId = update?.id;
+
+    if (!updateId) {
+      return res.status(500).json({ success: false, error: 'Failed to create Monday.com update' });
+    }
+
+    // Upload each photo to the update
+    let uploaded = 0;
+    let errors = 0;
+    for (const photo of photos) {
+      try {
+        await uploadFileToUpdate(updateId, photo.url, photo.name || `photo-${uploaded + 1}.jpg`);
+        uploaded++;
+        // Small delay between uploads
+        await new Promise(r => setTimeout(r, 500));
+      } catch (err) {
+        console.error(`[API] Photo upload failed for ${photo.name}:`, err.message);
+        errors++;
+      }
+    }
+
+    res.json({
+      success: true,
+      itemId,
+      updateId,
+      uploaded,
+      errors,
+      durationMs: Date.now() - start
+    });
+  } catch (error) {
+    console.error('[API] forward-photos-to-monday error:', error);
     res.status(500).json({ success: false, error: error.message, durationMs: Date.now() - start });
   }
 });

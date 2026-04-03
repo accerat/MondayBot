@@ -55,24 +55,51 @@ export async function addUpdate(itemId, updateText) {
 }
 
 /**
- * Upload a file to a Monday.com item
+ * Upload a file to a Monday.com update.
+ * Downloads the file from the URL, then uploads via multipart form to Monday's API.
+ * @param {string} updateId - The Monday.com update ID to attach the file to
+ * @param {string} fileUrl - URL to download the file from
+ * @param {string} fileName - Name for the uploaded file
  */
-export async function uploadFile(itemId, fileUrl, fileName) {
-  const query = `
-    mutation ($itemId: ID!, $fileUrl: String!) {
-      add_file_to_update (item_id: $itemId, url: $fileUrl) {
-        id
-      }
-    }
-  `;
+export async function uploadFileToUpdate(updateId, fileUrl, fileName) {
+  // Download the file
+  const fileResponse = await fetch(fileUrl);
+  if (!fileResponse.ok) throw new Error(`Failed to download file: ${fileResponse.status}`);
+  const fileBuffer = Buffer.from(await fileResponse.arrayBuffer());
 
-  const result = await mondayRequest(query, {
-    itemId: itemId,
-    fileUrl: fileUrl
+  // Build multipart form
+  const boundary = '----MondayBotUpload' + Date.now();
+  const query = `mutation ($updateId: ID!) { add_file_to_update (update_id: $updateId, file: $file) { id } }`;
+  const variables = JSON.stringify({ updateId });
+
+  const parts = [];
+  parts.push(`--${boundary}\r\nContent-Disposition: form-data; name="query"\r\n\r\n${query}\r\n`);
+  parts.push(`--${boundary}\r\nContent-Disposition: form-data; name="variables"\r\n\r\n${variables}\r\n`);
+  parts.push(`--${boundary}\r\nContent-Disposition: form-data; name="variables[file]"; filename="${fileName}"\r\nContent-Type: application/octet-stream\r\n\r\n`);
+
+  const bodyParts = [
+    Buffer.from(parts.join('')),
+    fileBuffer,
+    Buffer.from(`\r\n--${boundary}--\r\n`)
+  ];
+  const body = Buffer.concat(bodyParts);
+
+  const response = await fetch(MONDAY_API_URL + '/file', {
+    method: 'POST',
+    headers: {
+      'Authorization': MONDAY_API_TOKEN,
+      'Content-Type': `multipart/form-data; boundary=${boundary}`,
+    },
+    body
   });
 
-  console.log(`[MondayAPI] Uploaded file "${fileName}" to item ${itemId}`);
-  return result.add_file_to_update;
+  const data = await response.json();
+  if (data.errors) {
+    throw new Error(`Monday.com file upload error: ${JSON.stringify(data.errors)}`);
+  }
+
+  console.log(`[MondayAPI] Uploaded file "${fileName}" to update ${updateId}`);
+  return data.data?.add_file_to_update;
 }
 
 /**
