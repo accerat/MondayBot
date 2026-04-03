@@ -192,7 +192,8 @@ async function postMissedComment(thread, mondayItemId, update) {
       .setEmoji('💬')
   );
 
-  const message = `💬 **New Comment from ${authorName}** _(recovered)_\n` +
+  const replyLabel = update.isReply ? ' (reply)' : '';
+  const message = `💬 **New Comment from ${authorName}**${replyLabel} _(recovered)_\n` +
                   `>>> ${updateText}\n\n` +
                   mentions + crewWarning;
 

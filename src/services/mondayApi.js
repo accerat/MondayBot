@@ -323,13 +323,36 @@ export async function getItemUpdates(itemId, limit = 25) {
             id
             name
           }
+          replies {
+            id
+            text_body
+            created_at
+            creator {
+              id
+              name
+            }
+          }
         }
       }
     }
   `;
 
   const result = await mondayRequest(query, { itemId: [itemId], limit });
-  return result.items[0]?.updates || [];
+  const updates = result.items[0]?.updates || [];
+
+  // Flatten: return both top-level updates and replies as a single list
+  const all = [];
+  for (const u of updates) {
+    all.push(u);
+    if (u.replies) {
+      for (const r of u.replies) {
+        r.isReply = true;
+        r.parentId = u.id;
+        all.push(r);
+      }
+    }
+  }
+  return all;
 }
 
 /**
