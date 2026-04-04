@@ -24,6 +24,12 @@ export async function handleMondayBotMention(message) {
       return;
     }
 
+    // Check if this is a reply to another message — forward that message to Monday
+    if (message.reference?.messageId) {
+      await handleForwardReply(message, mondayItemId);
+      return;
+    }
+
     // Remove bot mention from message to get the command
     const content = message.content
       .replace(/<@!?\d+>/g, '') // Remove mentions
@@ -68,6 +74,65 @@ export async function handleMondayBotMention(message) {
 }
 
 /**
+ * Get the server nickname for a message author
+ */
+function getNickname(message) {
+  return message.member?.displayName || message.author.displayName || message.author.username;
+}
+
+/**
+ * Handle reply-to-forward: user replies to a message and @MondayBot to forward it
+ */
+async function handleForwardReply(message, mondayItemId) {
+  const repliedTo = await message.channel.messages.fetch(message.reference.messageId);
+  if (!repliedTo) {
+    await message.reply('❌ Could not find the message you replied to.');
+    return;
+  }
+
+  const originalAuthor = repliedTo.member?.displayName || repliedTo.author.displayName || repliedTo.author.username;
+  const forwardedBy = getNickname(message);
+
+  // Build the update text from the replied message
+  let forwardText = '';
+
+  // Include text content
+  if (repliedTo.content) {
+    forwardText += repliedTo.content;
+  }
+
+  // Include embed descriptions (e.g. daily report embeds)
+  if (repliedTo.embeds?.length > 0) {
+    for (const embed of repliedTo.embeds) {
+      if (embed.title) forwardText += `\n${embed.title}`;
+      if (embed.description) forwardText += `\n${embed.description}`;
+      for (const field of (embed.fields || [])) {
+        forwardText += `\n**${field.name}:** ${field.value}`;
+      }
+    }
+  }
+
+  if (!forwardText.trim()) {
+    await message.reply('❌ That message has no text content to forward.');
+    return;
+  }
+
+  // Include any additional note from the person forwarding
+  const extraNote = message.content.replace(/<@!?\d+>/g, '').trim();
+
+  let updateText = `**From ${originalAuthor} (forwarded by ${forwardedBy} via Discord):**\n${forwardText}`;
+  if (extraNote) {
+    updateText += `\n\n**Note from ${forwardedBy}:** ${extraNote}`;
+  }
+
+  await addUpdate(mondayItemId, updateText);
+  await message.react('✅');
+  await message.reply(`✅ Forwarded to Monday.com`);
+
+  console.log(`[MondayBot] Forwarded message from ${originalAuthor} to Monday item ${mondayItemId} (by ${forwardedBy})`);
+}
+
+/**
  * Handle update/note/comment command
  */
 async function handleUpdateCommand(message, mondayItemId, text) {
@@ -77,7 +142,7 @@ async function handleUpdateCommand(message, mondayItemId, text) {
   }
 
   // Add author info to the update
-  const updateText = `**From ${message.author.username} (Discord)**:\n${text}`;
+  const updateText = `**From ${getNickname(message)} (Discord):**\n${text}`;
 
   // Post to Monday.com
   await addUpdate(mondayItemId, updateText);
@@ -150,7 +215,7 @@ async function handleAttachCommand(message, mondayItemId, caption) {
 
   // If caption provided, also add as update
   if (caption && caption.length > 0) {
-    const updateText = `**From ${message.author.username} (Discord)**:\n${caption}\n\n_${attachments.length} file(s) attached_`;
+    const updateText = `**From ${getNickname(message)} (Discord):**\n${caption}\n\n_${attachments.length} file(s) attached_`;
     await addUpdate(mondayItemId, updateText);
   }
 
@@ -165,7 +230,10 @@ async function handleAttachCommand(message, mondayItemId, caption) {
 async function handleHelpCommand(message) {
   const helpText = `**MondayBot Commands**
 
-Use these commands in project threads to sync with Monday.com:
+Use these in project threads to sync with Monday.com:
+
+**📤 Forward a message:**
+Reply to any message and tag \`@MondayBot\` to forward it to Monday.com
 
 **📝 Add Update:**
 \`@MondayBot update Materials delivered to site\`
@@ -173,16 +241,14 @@ Use these commands in project threads to sync with Monday.com:
 
 **📊 Change Status:**
 \`@MondayBot status In Progress\`
-\`@MondayBot status Complete\`
 
 **📎 Upload Files:**
 \`@MondayBot attach [attach files] Site progress photos\`
 
 **💡 Quick Update:**
-Just mention @MondayBot with your message:
 \`@MondayBot Foundation work completed today\`
 
-All updates include your Discord username and are posted to the Monday.com project.`;
+All updates include your server nickname and are posted to Monday.com.`;
 
   await message.reply(helpText);
 }
