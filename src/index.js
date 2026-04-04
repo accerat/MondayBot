@@ -101,14 +101,14 @@ client.on(Events.InteractionCreate, async interaction => {
     try {
       await interaction.deferReply({ flags: 64 }); // ephemeral
 
-      const updateText = `**From ${interaction.user.displayName} (Discord):**\n${replyText}`;
+      const updateText = `**From ${interaction.member?.displayName || interaction.user.displayName} (Discord):**\n${replyText}`;
       await addUpdate(itemId, updateText);
 
       await interaction.editReply('✅ Reply posted to Monday.com');
 
       // Also post the reply visibly in the thread
       await interaction.channel.send(
-        `💬 **Reply from ${interaction.user.displayName}**\n>>> ${replyText}`
+        `💬 **Reply from ${interaction.member?.displayName || interaction.user.displayName}**\n>>> ${replyText}`
       );
 
       console.log(`[MondayBot] Reply forwarded to Monday item ${itemId} from ${interaction.user.displayName}`);
