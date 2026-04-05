@@ -58,7 +58,7 @@ export async function addUpdate(itemId, updateText) {
 
 /**
  * Upload a file to a Monday.com update.
- * Downloads the file from the URL, then uploads via multipart form to Monday's API.
+ * Downloads the file from the URL, converts to JPEG, then uploads via multipart form.
  * @param {string} updateId - The Monday.com update ID to attach the file to
  * @param {string} fileUrl - URL to download the file from
  * @param {string} fileName - Name for the uploaded file
@@ -69,38 +69,35 @@ export async function uploadFileToUpdate(updateId, fileUrl, fileName) {
   if (!fileResponse.ok) throw new Error(`Failed to download file: ${fileResponse.status}`);
   const rawBuffer = Buffer.from(await fileResponse.arrayBuffer());
   const fileBuffer = await sharp(rawBuffer).jpeg({ quality: 90 }).toBuffer();
+
   // Ensure filename ends with .jpeg
   if (!/\.jpe?g$/i.test(fileName)) {
     fileName = fileName.replace(/\.[^.]+$/, '.jpeg') || fileName + '.jpeg';
   }
 
-  // Build multipart form
-  const boundary = '----MondayBotUpload' + Date.now();
-  const query = `mutation ($updateId: ID!) { add_file_to_update (update_id: $updateId, file: $file) { id } }`;
-  const variables = JSON.stringify({ updateId });
+  // Build multipart form using native FormData (Node 18+)
+  const query = `mutation ($file: File!) { add_file_to_update (update_id: ${updateId}, file: $file) { id } }`;
 
-  const parts = [];
-  parts.push(`--${boundary}\r\nContent-Disposition: form-data; name="query"\r\n\r\n${query}\r\n`);
-  parts.push(`--${boundary}\r\nContent-Disposition: form-data; name="variables"\r\n\r\n${variables}\r\n`);
-  parts.push(`--${boundary}\r\nContent-Disposition: form-data; name="variables[file]"; filename="${fileName}"\r\nContent-Type: application/octet-stream\r\n\r\n`);
+  const formData = new FormData();
+  formData.append('query', query);
+  formData.append('variables[file]', new Blob([fileBuffer], { type: 'image/jpeg' }), fileName);
 
-  const bodyParts = [
-    Buffer.from(parts.join('')),
-    fileBuffer,
-    Buffer.from(`\r\n--${boundary}--\r\n`)
-  ];
-  const body = Buffer.concat(bodyParts);
-
-  const response = await fetch(MONDAY_API_URL + '/file', {
+  const response = await fetch(MONDAY_API_URL, {
     method: 'POST',
     headers: {
       'Authorization': MONDAY_API_TOKEN,
-      'Content-Type': `multipart/form-data; boundary=${boundary}`,
     },
-    body
+    body: formData
   });
 
-  const data = await response.json();
+  const text = await response.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`Monday.com file upload returned non-JSON: ${text.substring(0, 200)}`);
+  }
+
   if (data.errors) {
     throw new Error(`Monday.com file upload error: ${JSON.stringify(data.errors)}`);
   }
