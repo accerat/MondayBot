@@ -18,33 +18,48 @@ const MONDAYBOT_SECTION = `
 **Webhook Port:** 3001
 
 ### Features
-- Creates Discord threads when Monday.com items are created
-- Updates Discord when Monday.com items change
-- Routes projects to appropriate channels based on branch (ESS, OPD)
-- @mention handler for project queries
-- Weekly project summary reports
-- Health monitoring
+- Creates Discord threads when Monday.com items are created/updated
+- Routes by group: non-ESS → Default channel, ESS → ESS channel, OPD branch → OPD channel
+- Pinned project info posts in each thread (CTL, electrician, dates, materials, SOW)
+- Comment notifications: Monday comments ping foreman + ops leadership in Discord
+- "Reply to Monday.com" button on comments → modal → forwards reply
+- Reply-to-forward: reply to any message + @MondayBot to forward it to Monday.com
+- @mention handler: \`@MondayBot update/status/attach/help\`
+- Cross-bot API for DailyReportBot (forward reports + photos to Monday.com)
+- Photo uploads convert to JPEG via sharp before uploading to Monday.com
+- Nightly comment reconciler catches missed webhooks + nested replies
+- Nightly pinned post refresh keeps project info current
+- Cycle prevention: Discord→Monday posts are not echoed back
 
 ### Discord Channels
 | Channel | ID | Purpose |
 |---------|-----|---------|
-| ESS Channel | 1456320404330381425 | ESS projects |
-| OPD Channel | 1446176868695937084 | OPD projects |
-| Default Channel | 1397270791175012453 | Other projects |
+| ESS Channel | 1456320404330381425 | ESS projects (all groups except non-ESS) |
+| OPD Channel | 1446176868695937084 | OPD branch projects |
+| Default Channel | 1397270791175012453 | Non-ESS group projects |
 | Flag Channel | 1397271405606998036 | Flagged items |
 
 ### Monday.com Boards
-- ESS 2025: 7059269339
-- ESS 2026: 18392974573
+- MLB 2026 ESS: 18392974573 (only active board)
 
-### Webhook Endpoint
-\`POST /webhook/monday\` - Receives Monday.com change notifications
+### API Endpoints
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| \`POST /webhook/monday\` | POST | Receives Monday.com webhooks |
+| \`POST /api/forward-to-monday\` | POST | Cross-bot: post text to Monday item |
+| \`POST /api/forward-photos-to-monday\` | POST | Cross-bot: upload photos (JPEG) to Monday item |
+| \`GET /api/lookup-monday-id/:threadId\` | GET | Resolve Discord thread → Monday item ID |
+| \`GET /api/project-dates/:threadId\` | GET | Get project timeline/dates for a thread |
+| \`POST /scheduler/*\` | POST | Central scheduler job triggers |
 
-### Scheduled Jobs
+### Scheduled Jobs (via Central Scheduler)
 | Job | Schedule | Function |
 |-----|----------|----------|
-| Weekly Summary | Weekly | Generate project status summary |
-| Health Monitor | Continuous | Monitor bot health |
+| Daily Sync | 7:00 AM CT | Create missing threads |
+| Weekly Summary | Mon 8:00 AM CT | Post weekly stats |
+| Comment Reconciler | 12:15 AM CT | Catch missed webhooks + replies |
+| Pinned Post Refresh | 12:30 AM CT | Update all pinned posts |
+| Health Monitor | Every 5 min | Check API + Discord health |
 
 ---
 `;

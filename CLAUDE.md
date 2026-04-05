@@ -10,6 +10,15 @@
   - Syncs from Google Drive: Worker Resources folder, Skill Training folder
   - See AIBot's CLAUDE.md for full schema and API details
 
+## Development Rules (ALL BOTS)
+
+- **Always update documentation with feature changes:**
+  1. This bot's `CLAUDE.md` — update with new features, code locations, env vars
+  2. `scripts/updateBotCapabilities.js` — update the bot's section constant
+  3. Project memory (`MEMORY.md`) — update if applicable
+- All bots share: AWS `18.118.203.113`, SSH user `admin`, key `LightsailDefaultKey-us-east-2-new.pem`, timezone `America/Chicago`, Guild `1396930021817581732`
+- Google Drive is the primary database for all bots (via `driveStorage.js`)
+
 ---
 
 ## What It Does
@@ -29,10 +38,10 @@ Bidirectional sync between Monday.com and Discord:
 |------|-------|
 | Local Path | C:\Users\blitz\bots\MondayBot |
 | AWS Directory | /home/admin/bots/MondayBot |
-| AWS IP | 3.148.164.166 (changes on reboot - use AWS CLI to get current) |
+| AWS IP | 18.118.203.113 (changes on reboot - use AWS CLI to get current) |
 | PM2 Process | MondayBot |
 | Webhook Port | 3001 |
-| Webhook URL | http://3.148.164.166:3001/webhook/monday |
+| Webhook URL | http://18.118.203.113:3001/webhook/monday |
 
 ---
 
@@ -62,15 +71,33 @@ Bidirectional sync between Monday.com and Discord:
 ### Core Features
 - **Webhook receiver** - Receives Monday.com webhooks and posts updates to Discord threads
 - **Thread creation** - Auto-creates Discord threads for new Monday items
-- **Branch routing** - Routes to ESS or OPD channel based on Branch column value
-- **@mention handler** - Responds to @MondayBot mentions in Discord
+- **Group-based routing** - Non-ESS group → Default channel, all other groups → ESS channel, Branch column "OPD" → OPD channel
+- **@mention handler** - Responds to @MondayBot mentions in Discord (updates, status changes, file uploads)
+- **Reply-to-forward** - Reply to any message + @MondayBot to forward it to the linked Monday.com item
+- **Comment notifications** - Monday comments ping the job's foreman (via Crew→Discord mapping) + ops leadership
+- **Reply button** - "Reply to Monday.com" button on every comment → modal → forwards reply as Monday update
+- **Crew mapping** - Shared Google Drive mapping (crew name → Discord user ID), loaded on startup
+- **Pinned posts** - Rich project info pinned in each thread (CTL, electrician, dates, materials, etc.)
+- **Cycle prevention** - Discord→Monday posts are detected and not echoed back to Discord
 
-### Scheduled Jobs
+### Cross-Bot API (port 3001)
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/forward-to-monday` | POST | Posts text update to Monday.com item (used by DailyReportBot) |
+| `/api/forward-photos-to-monday` | POST | Uploads photos as JPEG to Monday.com update (downloads, converts via sharp) |
+| `/api/lookup-monday-id/:threadId` | GET | Resolves Discord thread → Monday item ID |
+| `/api/project-dates/:threadId` | GET | Returns project timeline/dates (used by LodgingBot) |
+
+### Scheduled Jobs (via Central Scheduler)
 | Job | Schedule | Description |
 |-----|----------|-------------|
 | Daily Sync | 7 AM CT daily | Auto-creates threads for items missing them, posts report |
 | Weekly Summary | 8 AM CT Mondays | Posts weekly stats (threads created, flags, resolutions) |
+| Comment Reconciler | 12:15 AM CT daily | Catches missed webhooks + replies from last 24h |
+| Pinned Post Refresh | 12:30 AM CT daily | Updates all pinned posts with latest Monday.com data (edit only, no new posts) |
 | Health Monitor | Every 5 min | Checks Monday API + Discord, alerts after 3 failures |
+
+All scheduled jobs also have `/scheduler/*` HTTP endpoints for the central scheduler service. Set `SCHEDULER_MODE=external` to disable local cron.
 
 ### Flag System
 - **Flag on invalid branch** - Posts to flag channel if branch is empty, multiple, or unrecognized
@@ -90,6 +117,7 @@ Bidirectional sync between Monday.com and Discord:
 | `/monday-backfill` | Find items missing threads (manual override for daily sync) |
 | `/monday-status` | Check bot status |
 | `/project-info` | Get info about a specific project |
+| `/monday-refresh-posts` | Bulk-update all pinned posts with latest Monday.com data (creates missing ones) |
 
 ---
 
@@ -99,17 +127,27 @@ Bidirectional sync between Monday.com and Discord:
 - `src/index.js` - Main entry (Discord client + Express webhook server)
 
 ### Services
-- `src/services/mondayWebhook.js` - Handles incoming Monday.com webhooks
+- `src/services/mondayWebhook.js` - Handles incoming Monday.com webhooks (comment notifications, reply button, value extraction)
 - `src/services/mondayApi.js` - Monday.com API client
 - `src/services/threadMapper.js` - Maps Monday item IDs to Discord thread IDs
+- `src/services/pinnedPostFormatter.js` - Formats/updates pinned posts with project info (CTL, electrician, etc.)
+- `src/services/crewMapping.js` - Crew name → Discord user ID mapping (shared Google Drive file)
 - `src/services/flagTracker.js` - Tracks flagged items (prevents duplicates)
 - `src/services/healthMonitor.js` - Health check system
 - `src/services/mondayMentionHandler.js` - Handles @MondayBot mentions
 - `src/services/projectSyncOrchestrator.js` - Orchestrates project syncing
 
+### Utils
+- `src/utils/driveStorage.js` - Google Drive storage wrapper for crew mapping
+
+### HTTP Routes
+- `src/http/schedulerRoutes.js` - Central scheduler endpoints (`/scheduler/*`)
+- `src/http/apiRoutes.js` - Cross-bot API endpoints (`/api/*`) — forward-to-monday, photo upload, project dates
+
 ### Jobs
 - `src/jobs/dailySync.js` - Daily auto-sync (7 AM CT)
 - `src/jobs/weeklySummary.js` - Weekly summary (Monday 8 AM CT)
+- `src/jobs/commentReconciler.js` - Nightly comment + reply reconciliation (catches missed webhooks)
 
 ### Commands
 - `src/commands/mondaySyncProjects.js` - Manual sync command
@@ -130,7 +168,7 @@ Webhooks need to be configured in Monday.com to send to the bot.
 
 ### Webhook URL
 ```
-http://3.148.164.166:3001/webhook/monday
+http://18.118.203.113:3001/webhook/monday
 ```
 
 ### Required Automations (per board)
@@ -147,33 +185,19 @@ http://3.148.164.166:3001/webhook/monday
 
 ---
 
-## Item Filtering (Group-Based)
+## Item Routing (Group + Branch Based)
 
-The bot uses **Monday.com groups** to filter items:
-- Items in **"MLB non-ESS jobs"** group are **excluded** (not synced)
-- All other items are considered **ESS projects** and synced to ESS channel
-- If Branch column is explicitly "OPD", routes to OPD channel instead
+ALL items on the 2026 board are synced. Routing is determined by group first, then Branch column:
 
-This filtering happens at the API level - internal/template items in the non-ESS group are never fetched.
+| Condition | Discord Channel |
+|-----------|----------------|
+| "MLB non-ESS jobs" group | Default channel (1397270791175012453) |
+| Branch column = "OPD" | OPD channel (1446176868695937084) |
+| Everything else | ESS channel (1456320404330381425) |
+
+New groups (e.g. "November 2026") are automatically treated as ESS.
 
 **Note:** Only the 2026 board is synced. 2025 board was removed.
-
----
-
-## Branch Routing Logic
-
-| Branch Value | Action |
-|--------------|--------|
-| ESS | Create thread in ESS channel |
-| OPD | Create thread in OPD channel |
-| (empty) | Flag: "No branch selected" |
-| Multiple values | Flag: "Multiple branches selected" |
-| Other value | Flag: "Unrecognized branch: X" |
-
-When a flagged item's branch is fixed, the bot:
-1. Creates the thread
-2. Posts "Resolved" notice to flag channel
-3. Removes item from flag tracking
 
 ---
 
@@ -186,13 +210,13 @@ cd C:/Users/blitz/bots/MondayBot
 git add -A && git commit -m "Description" && git push origin main
 
 # AWS: pull and restart
-ssh -i "C:/Users/blitz/bots/LightsailDefaultKey-us-east-2-new.pem" admin@3.148.164.166 \
+ssh -i "C:/Users/blitz/bots/LightsailDefaultKey-us-east-2-new.pem" admin@18.118.203.113 \
   "cd /home/admin/bots/MondayBot && git pull && npm install && npm run register && pm2 restart MondayBot --update-env"
 ```
 
 ### Check Logs
 ```bash
-ssh -i "C:/Users/blitz/bots/LightsailDefaultKey-us-east-2-new.pem" admin@3.148.164.166 \
+ssh -i "C:/Users/blitz/bots/LightsailDefaultKey-us-east-2-new.pem" admin@18.118.203.113 \
   "pm2 logs MondayBot --lines 30 --nostream"
 ```
 
@@ -216,6 +240,12 @@ DEFAULT_CHANNEL_ID=1397270791175012453
 FLAG_CHANNEL_ID=1397271405606998036
 WEBHOOK_PORT=3001
 TIMEZONE=America/Chicago
+CREW_MAPPING_DRIVE_ID=<Google Drive file ID for shared crew mapping>
+GOOGLE_OAUTH_CLIENT_ID=<Google OAuth client ID>
+GOOGLE_OAUTH_CLIENT_SECRET=<Google OAuth client secret>
+GOOGLE_OAUTH_REFRESH_TOKEN=<Google OAuth refresh token>
+SCHEDULER_TOKEN=<shared token for central scheduler + cross-bot auth>
+SCHEDULER_MODE=<set to "external" to disable local cron, let central scheduler handle jobs>
 ```
 
 ---
@@ -240,6 +270,26 @@ TIMEZONE=America/Chicago
 ---
 
 ## Session Notes
+
+### 2026-04-04: Central Scheduler, Cross-Bot API, Sync Fixes, Reply Forwarding
+- **Central Scheduler** — New service orchestrates all 28 cron jobs across 8 bots sequentially via HTTP. MondayBot jobs: daily-sync, weekly-summary, comment-reconciler, refresh-pinned-posts. Set `SCHEDULER_MODE=external` to disable local cron.
+- **Comment Reconciler** — Nightly job catches missed webhooks. Now also catches Monday.com **replies** (which don't trigger webhooks).
+- **Pinned Post Refresh** — Nightly update of all pinned posts. Fixed fundamental bug: forum thread starter message ID equals thread ID in Discord, so `messages.fetch()` always failed. Now uses `fetchStarterMessage()` directly.
+- **Cross-Bot API** — `POST /api/forward-to-monday` (text updates), `POST /api/forward-photos-to-monday` (downloads + converts to JPEG via sharp + uploads as files), `GET /api/lookup-monday-id/:threadId`, `GET /api/project-dates/:threadId` (used by LodgingBot).
+- **Non-ESS sync** — Removed group exclusion filter. Non-ESS items now sync to Default channel. ESS items sync to ESS channel. Branch column OPD override still works.
+- **Reply-to-forward** — Reply to any message in a project thread + @MondayBot to forward it to Monday.com. Includes original author, content, embeds, and optional note.
+- **Cycle prevention** — Webhook handler skips updates containing `(Discord):` or `Photos from Discord` to prevent Discord→Monday→Discord loops.
+- **Nickname fix** — All Discord→Monday posts use server nickname (member.displayName) instead of global username.
+- New files: `src/http/schedulerRoutes.js`, `src/http/apiRoutes.js`, `src/jobs/commentReconciler.js`
+- New dependency: `sharp` (image conversion for photo uploads)
+
+### 2026-03-19: Comment Notifications + Reply Button + Electrician Fix
+- Fixed webhook value extraction for all column types (dropdowns, mirrors, dates, etc.)
+- Fixed pinned post using stale data — now re-fetches from API on updates
+- Added foreman + ops leadership pings on Monday comments (crew mapping from Google Drive)
+- Added "Reply to Monday.com" button on comments (modal → forwards to Monday as update)
+- Warns ops when crew-to-Discord link is missing
+- Ops leadership ID: 1411793485799096490
 
 ### 2026-02-19: Group-Based Filtering
 - Changed from Mason/Carp Status to group-based filtering
