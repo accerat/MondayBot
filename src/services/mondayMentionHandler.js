@@ -539,8 +539,8 @@ async function showPhotoPage(interaction, sessionKey, isUpdate = false) {
   // Which photo to show large — default to first on page
   // Header embed
   const headerEmbed = new EmbedBuilder()
-    .setTitle(`📸 Select Photos (${selected.size} selected)`)
-    .setDescription(`Page ${page + 1} of ${totalPages} • ${photos.length} total photos\nTap a number to select/deselect`)
+    .setTitle(`📸 Photos to include: (${selected.size} selected)`)
+    .setDescription(`Page ${page + 1} of ${totalPages} • ${photos.length} total`)
     .setColor(0x00b0f4);
 
   // One embed per photo with full-size image
@@ -550,7 +550,7 @@ async function showPhotoPage(interaction, sessionKey, isUpdate = false) {
     const time = new Date(p.timestamp).toLocaleString('en-US', { timeZone: 'America/Chicago', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
     return new EmbedBuilder()
       .setDescription(`${check} **${i + 1}.** ${p.author} — ${time}`)
-      .setImage(p.url);
+      .setThumbnail(p.url);
   });
 
   // Toggle buttons — one row of up to 5
