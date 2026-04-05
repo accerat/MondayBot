@@ -87,18 +87,19 @@ router.post('/forward-photos-to-monday', async (req, res) => {
       return res.status(500).json({ success: false, error: 'Failed to create Monday.com update' });
     }
 
-    // Upload each photo to the update
+    // Upload 3 at a time in parallel for speed
     let uploaded = 0;
     let errors = 0;
-    for (const photo of photos) {
-      try {
-        await uploadFileToUpdate(updateId, photo.url, photo.name || `photo-${uploaded + 1}.jpg`);
-        uploaded++;
-        // Small delay between uploads
-        await new Promise(r => setTimeout(r, 500));
-      } catch (err) {
-        console.error(`[API] Photo upload failed for ${photo.name}:`, err.message);
-        errors++;
+    for (let i = 0; i < photos.length; i += 3) {
+      const batch = photos.slice(i, i + 3);
+      const results = await Promise.allSettled(
+        batch.map((photo, j) =>
+          uploadFileToUpdate(updateId, photo.url, photo.name || `photo-${i + j + 1}.jpg`)
+        )
+      );
+      for (const r of results) {
+        if (r.status === 'fulfilled') uploaded++;
+        else { errors++; console.error(`[API] Photo upload failed:`, r.reason?.message); }
       }
     }
 

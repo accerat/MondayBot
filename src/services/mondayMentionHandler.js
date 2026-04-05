@@ -483,21 +483,26 @@ export async function handleMondayBotButton(interaction) {
       const selectedPhotos = [...session.selected].map(i => session.photos[i]);
       const update = await addUpdate(session.mondayItemId, `📸 ${selectedPhotos.length} photo(s) from Discord`);
 
+      // Upload 3 at a time in parallel for speed
       let uploaded = 0;
-      for (const photo of selectedPhotos) {
-        try {
-          const fileName = photo.name.replace(/\.[^.]+$/, '.jpeg') || `photo-${uploaded + 1}.jpeg`;
-          await uploadFileToUpdate(update.id, photo.url, fileName);
-          uploaded++;
-          await new Promise(r => setTimeout(r, 500));
-        } catch (err) {
-          console.error(`[MondayBot] Photo upload failed:`, err.message);
+      let errors = 0;
+      for (let i = 0; i < selectedPhotos.length; i += 3) {
+        const batch = selectedPhotos.slice(i, i + 3);
+        const results = await Promise.allSettled(
+          batch.map((photo, j) => {
+            const fileName = photo.name.replace(/\.[^.]+$/, '.jpeg') || `photo-${i + j + 1}.jpeg`;
+            return uploadFileToUpdate(update.id, photo.url, fileName);
+          })
+        );
+        for (const r of results) {
+          if (r.status === 'fulfilled') uploaded++;
+          else { errors++; console.error('[MondayBot] Photo upload failed:', r.reason?.message); }
         }
       }
 
-      await interaction.editReply(`✅ Uploaded **${uploaded}** of ${selectedPhotos.length} photo(s) to Monday.com`);
+      await interaction.editReply(`✅ Uploaded **${uploaded}** photo(s) to Monday.com${errors > 0 ? ` (${errors} failed)` : ''}`);
     } catch (error) {
-      await interaction.editReply(`❌ Failed: ${error.message}`);
+      try { await interaction.editReply(`❌ Failed: ${error.message}`); } catch {}
     }
     photoSessions.delete(sessionKey);
     return;
