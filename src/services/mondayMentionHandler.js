@@ -557,10 +557,11 @@ async function showPhotoPage(interaction, sessionKey, isUpdate = false) {
   const toggleRow = new ActionRowBuilder();
   pagePhotos.forEach((p, i) => {
     const idx = start + i;
+    const day = new Date(p.timestamp).toLocaleDateString('en-US', { timeZone: 'America/Chicago', month: 'numeric', day: 'numeric' });
     toggleRow.addComponents(
       new ButtonBuilder()
         .setCustomId(`mb:ptoggle:${idx}:${sessionKey}`)
-        .setLabel(`${selected.has(idx) ? '✅' : '⬜'} ${i + 1}`)
+        .setLabel(`${selected.has(idx) ? '✅' : '⬜'} ${i + 1} (${day})`)
         .setStyle(selected.has(idx) ? ButtonStyle.Success : ButtonStyle.Secondary)
     );
   });
