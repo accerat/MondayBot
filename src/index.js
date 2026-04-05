@@ -12,6 +12,7 @@ import { initializeHealthMonitor } from './services/healthMonitor.js';
 import { initializeCrewMapping } from './services/crewMapping.js';
 import { initializeCommentReconciler } from './jobs/commentReconciler.js';
 import { addUpdate } from './services/mondayApi.js';
+import { handleMondayBotButton, handleMondayBotModal } from './services/mondayMentionHandler.js';
 import schedulerRoutes, { setClient as setSchedulerClient } from './http/schedulerRoutes.js';
 import apiRoutes from './http/apiRoutes.js';
 
@@ -117,6 +118,26 @@ client.on(Events.InteractionCreate, async interaction => {
       try {
         await interaction.editReply('❌ Failed to post reply to Monday.com');
       } catch {}
+    }
+    return;
+  }
+
+  // --- MondayBot action panel buttons (mb:*) ---
+  if (interaction.isButton() && interaction.customId.startsWith('mb:')) {
+    try {
+      await handleMondayBotButton(interaction);
+    } catch (error) {
+      console.error('[MondayBot] Button error:', error);
+    }
+    return;
+  }
+
+  // --- MondayBot modal submits (mb:*) ---
+  if (interaction.isModalSubmit() && interaction.customId.startsWith('mb:')) {
+    try {
+      await handleMondayBotModal(interaction);
+    } catch (error) {
+      console.error('[MondayBot] Modal error:', error);
     }
     return;
   }

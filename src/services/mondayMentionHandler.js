@@ -2,7 +2,16 @@
 // Handles @MondayBot mentions in Discord
 
 import { getThreadId } from './threadMapper.js';
-import { addUpdate, uploadFile, updateColumn, getItem } from './mondayApi.js';
+import { addUpdate, uploadFile, updateColumn, getItem, uploadFileToUpdate } from './mondayApi.js';
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, EmbedBuilder } from 'discord.js';
+import sharp from 'sharp';
+
+const MLB_OFFICE_ROLE_ID = process.env.MLB_OFFICE_ROLE_ID || '1396930700447449149';
+const OPS_LEADERSHIP_ROLE_ID = '1411793485799096490';
+const SURVEYOR_ROLE_ID = '1473765347005042761';
+
+// Photo selection sessions for @MondayBot photo flow
+const photoSessions = new Map();
 
 /**
  * Handle @MondayBot mention
@@ -64,8 +73,13 @@ export async function handleMondayBotMention(message) {
         break;
 
       default:
-        // If no command specified, treat entire message as an update
-        await handleUpdateCommand(message, mondayItemId, content);
+        // If text was provided, treat as an update
+        if (content) {
+          await handleUpdateCommand(message, mondayItemId, content);
+        } else {
+          // No text — show action panel
+          await handleShowPanel(message, mondayItemId);
+        }
     }
   } catch (error) {
     console.error('[MondayBot] Error handling mention:', error);
@@ -251,6 +265,306 @@ Reply to any message and tag \`@MondayBot\` to forward it to Monday.com
 All updates include your server nickname and are posted to Monday.com.`;
 
   await message.reply(helpText);
+}
+
+/**
+ * Check if a member has ops/office/surveyor permission
+ */
+function hasForwardPermission(member) {
+  if (!member) return false;
+  if (member.roles.cache.has(MLB_OFFICE_ROLE_ID)) return true;
+  if (member.roles.cache.has(OPS_LEADERSHIP_ROLE_ID)) return true;
+  if (member.roles.cache.has(SURVEYOR_ROLE_ID)) return true;
+  return false;
+}
+
+/**
+ * Show action panel when @MondayBot is mentioned with no command
+ */
+async function handleShowPanel(message, mondayItemId) {
+  const rows = [];
+
+  // Forward buttons for ops/office/surveyor
+  if (hasForwardPermission(message.member)) {
+    rows.push(new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`mb:photos:${mondayItemId}`)
+        .setLabel('Send Photos to Monday')
+        .setStyle(ButtonStyle.Success)
+        .setEmoji('📸'),
+      new ButtonBuilder()
+        .setCustomId(`mb:forward_recent:${mondayItemId}`)
+        .setLabel('Forward Recent Messages')
+        .setStyle(ButtonStyle.Primary)
+        .setEmoji('📤'),
+    ));
+  }
+
+  rows.push(new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`mb:write_update:${mondayItemId}`)
+      .setLabel('Write Update to Monday')
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji('📝'),
+    new ButtonBuilder()
+      .setCustomId(`mb:help`)
+      .setLabel('Help')
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji('❓'),
+  ));
+
+  await message.reply({
+    content: '**MondayBot** — What would you like to do?',
+    components: rows,
+  });
+}
+
+/**
+ * Handle MondayBot button interactions.
+ * Called from the interaction handler in index.js.
+ */
+export async function handleMondayBotButton(interaction) {
+  const id = interaction.customId;
+
+  // ── Help ──
+  if (id === 'mb:help') {
+    await interaction.reply({ content: helpText(), flags: 64 });
+    return;
+  }
+
+  // ── Write Update modal ──
+  if (id.startsWith('mb:write_update:')) {
+    const mondayItemId = id.replace('mb:write_update:', '');
+    const modal = new ModalBuilder()
+      .setCustomId(`mb:update_modal:${mondayItemId}`)
+      .setTitle('Write Update to Monday.com');
+    modal.addComponents(new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId('update_text')
+        .setLabel('Your update')
+        .setStyle(TextInputStyle.Paragraph)
+        .setRequired(true)
+    ));
+    await interaction.showModal(modal);
+    return;
+  }
+
+  // ── Send Photos flow ──
+  if (id.startsWith('mb:photos:')) {
+    if (!hasForwardPermission(interaction.member)) {
+      return interaction.reply({ content: '❌ Only Ops/Office/Surveyor roles can do this.', flags: 64 });
+    }
+    const mondayItemId = id.replace('mb:photos:', '');
+    await interaction.deferReply({ flags: 64 });
+
+    // Collect photos from thread
+    const thread = interaction.channel;
+    const messages = await thread.messages.fetch({ limit: 100 });
+    const photos = [];
+
+    for (const [, msg] of messages) {
+      if (msg.author.bot) continue;
+      for (const att of msg.attachments.values()) {
+        if (att.contentType?.startsWith('image/') || /\.(jpg|jpeg|png|gif|webp|heic)$/i.test(att.name)) {
+          photos.push({
+            url: att.url,
+            name: att.name,
+            author: msg.member?.displayName || msg.author.displayName || msg.author.username,
+            timestamp: msg.createdTimestamp,
+          });
+        }
+      }
+      for (const emb of msg.embeds) {
+        if (emb.image?.url) {
+          photos.push({
+            url: emb.image.url,
+            name: 'pasted-image.jpeg',
+            author: msg.member?.displayName || msg.author.displayName || msg.author.username,
+            timestamp: msg.createdTimestamp,
+          });
+        }
+      }
+    }
+
+    // Sort newest first
+    photos.sort((a, b) => b.timestamp - a.timestamp);
+
+    if (photos.length === 0) {
+      return interaction.editReply('❌ No photos found in this thread.');
+    }
+
+    const sessionKey = `${interaction.user.id}_${mondayItemId}`;
+    photoSessions.set(sessionKey, {
+      photos, selected: new Set(), currentIndex: 0, mondayItemId,
+    });
+
+    await showPhotoSelector(interaction, sessionKey);
+    return;
+  }
+
+  // ── Forward Recent Messages ──
+  if (id.startsWith('mb:forward_recent:')) {
+    if (!hasForwardPermission(interaction.member)) {
+      return interaction.reply({ content: '❌ Only Ops/Office/Surveyor roles can do this.', flags: 64 });
+    }
+    const mondayItemId = id.replace('mb:forward_recent:', '');
+    await interaction.deferReply({ flags: 64 });
+
+    const thread = interaction.channel;
+    const messages = await thread.messages.fetch({ limit: 30 });
+    // Get non-bot messages from the last 24h, newest first
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    const recent = messages
+      .filter(m => !m.author.bot && m.createdTimestamp > cutoff)
+      .sort((a, b) => b.createdTimestamp - a.createdTimestamp)
+      .first(10);
+
+    if (recent.length === 0) {
+      return interaction.editReply('❌ No recent messages (last 24h) found to forward.');
+    }
+
+    // Format and send
+    const lines = recent.map(m => {
+      const author = m.member?.displayName || m.author.displayName || m.author.username;
+      const time = new Date(m.createdTimestamp).toLocaleString('en-US', { timeZone: 'America/Chicago', hour: 'numeric', minute: '2-digit' });
+      const text = m.content || (m.embeds[0]?.description?.substring(0, 200)) || '(attachment)';
+      return `**${author}** (${time}): ${text}`;
+    }).join('\n\n');
+
+    const body = `**Recent Discord Messages (forwarded by ${interaction.member?.displayName || interaction.user.displayName}):**\n\n${lines}`;
+    await addUpdate(mondayItemId, body);
+    await interaction.editReply(`✅ Forwarded ${recent.length} recent message(s) to Monday.com`);
+    return;
+  }
+
+  // ── Photo Include/Skip ──
+  if (id.startsWith('mb:photo_include:') || id.startsWith('mb:photo_skip:')) {
+    const parts = id.split(':');
+    const action = parts[1]; // photo_include or photo_skip
+    const sessionKey = parts.slice(2).join(':');
+    const session = photoSessions.get(sessionKey);
+    if (!session) {
+      return interaction.update({ content: '❌ Session expired. Tag @MondayBot again to start over.', embeds: [], components: [] });
+    }
+    if (action === 'photo_include') session.selected.add(session.currentIndex);
+    session.currentIndex++;
+
+    if (session.currentIndex >= session.photos.length) {
+      await showPhotoSummary(interaction, sessionKey);
+    } else {
+      await showPhotoSelector(interaction, sessionKey, true);
+    }
+    return;
+  }
+
+  // ── Photo Confirm ──
+  if (id.startsWith('mb:photo_confirm:')) {
+    const sessionKey = id.replace('mb:photo_confirm:', '');
+    const session = photoSessions.get(sessionKey);
+    if (!session) {
+      return interaction.update({ content: '❌ Session expired.', embeds: [], components: [] });
+    }
+    await interaction.update({ content: '⏳ Uploading photos to Monday.com...', embeds: [], components: [] });
+
+    try {
+      const selectedPhotos = [...session.selected].map(i => session.photos[i]);
+      const update = await addUpdate(session.mondayItemId, `📸 ${selectedPhotos.length} photo(s) from Discord`);
+
+      let uploaded = 0;
+      for (const photo of selectedPhotos) {
+        try {
+          const fileName = photo.name.replace(/\.[^.]+$/, '.jpeg') || `photo-${uploaded + 1}.jpeg`;
+          await uploadFileToUpdate(update.id, photo.url, fileName);
+          uploaded++;
+          await new Promise(r => setTimeout(r, 500));
+        } catch (err) {
+          console.error(`[MondayBot] Photo upload failed:`, err.message);
+        }
+      }
+
+      await interaction.editReply(`✅ Uploaded **${uploaded}** of ${selectedPhotos.length} photo(s) to Monday.com`);
+    } catch (error) {
+      await interaction.editReply(`❌ Failed: ${error.message}`);
+    }
+    photoSessions.delete(sessionKey);
+    return;
+  }
+
+  // ── Photo Cancel ──
+  if (id.startsWith('mb:photo_cancel:')) {
+    const sessionKey = id.replace('mb:photo_cancel:', '');
+    photoSessions.delete(sessionKey);
+    await interaction.update({ content: '❌ Cancelled.', embeds: [], components: [] });
+    return;
+  }
+}
+
+/**
+ * Handle MondayBot modal submissions
+ */
+export async function handleMondayBotModal(interaction) {
+  if (interaction.customId.startsWith('mb:update_modal:')) {
+    const mondayItemId = interaction.customId.replace('mb:update_modal:', '');
+    await interaction.deferReply({ flags: 64 });
+    const text = interaction.fields.getTextInputValue('update_text');
+    const name = interaction.member?.displayName || interaction.user.displayName;
+    await addUpdate(mondayItemId, `**From ${name} (Discord):**\n${text}`);
+    await interaction.editReply('✅ Update posted to Monday.com');
+  }
+}
+
+// ── Photo Selector UI ──
+
+async function showPhotoSelector(interaction, sessionKey, isUpdate = false) {
+  const session = photoSessions.get(sessionKey);
+  const photo = session.photos[session.currentIndex];
+  const total = session.photos.length;
+  const current = session.currentIndex + 1;
+
+  const embed = new EmbedBuilder()
+    .setTitle(`Photo ${current} of ${total}`)
+    .setDescription(`By **${photo.author}** — ${session.selected.size} selected so far`)
+    .setImage(photo.url)
+    .setFooter({ text: photo.name });
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`mb:photo_include:${sessionKey}`).setLabel('✅ Include').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`mb:photo_skip:${sessionKey}`).setLabel('❌ Skip').setStyle(ButtonStyle.Secondary),
+  );
+
+  const payload = { embeds: [embed], components: [row] };
+  if (isUpdate) await interaction.update(payload);
+  else await interaction.editReply(payload);
+}
+
+async function showPhotoSummary(interaction, sessionKey) {
+  const session = photoSessions.get(sessionKey);
+  const count = session.selected.size;
+  if (count === 0) {
+    photoSessions.delete(sessionKey);
+    return interaction.update({ content: '❌ No photos selected.', embeds: [], components: [] });
+  }
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`mb:photo_confirm:${sessionKey}`).setLabel(`Send ${count} Photo${count > 1 ? 's' : ''} to Monday`).setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`mb:photo_cancel:${sessionKey}`).setLabel('Cancel').setStyle(ButtonStyle.Danger),
+  );
+  await interaction.update({ content: `**Ready to send ${count} of ${session.photos.length} photos** to Monday.com`, embeds: [], components: [row] });
+}
+
+function helpText() {
+  return `**MondayBot Commands**
+
+**Just tag @MondayBot** (no text) to get action buttons:
+- 📸 Send Photos to Monday
+- 📤 Forward Recent Messages
+- 📝 Write Update to Monday
+
+**Reply to a message + @MondayBot** to forward that specific message.
+
+**Text commands:**
+\`@MondayBot update Materials delivered\`
+\`@MondayBot status In Progress\`
+\`@MondayBot attach [files] Caption here\``;
 }
 
 /**
