@@ -477,7 +477,12 @@ export async function handleMondayBotButton(interaction) {
       return interaction.update({ content: '❌ No photos selected. Tap the numbered buttons to select photos first.', embeds: [], components: [] });
     }
 
+    // Dismiss the ephemeral interaction immediately
     await interaction.update({ content: `⏳ Uploading ${session.selected.size} photo(s) to Monday.com...`, embeds: [], components: [] });
+
+    // Post a visible progress message in the thread so it doesn't time out
+    const channel = interaction.channel;
+    const statusMsg = await channel.send(`⏳ Uploading **${session.selected.size}** photo(s) to Monday.com...`);
 
     try {
       const selectedPhotos = [...session.selected].map(i => session.photos[i]);
@@ -498,11 +503,13 @@ export async function handleMondayBotButton(interaction) {
           if (r.status === 'fulfilled') uploaded++;
           else { errors++; console.error('[MondayBot] Photo upload failed:', r.reason?.message); }
         }
+        // Update progress in the thread
+        await statusMsg.edit(`⏳ Uploading photos... **${uploaded}/${selectedPhotos.length}** done${errors > 0 ? ` (${errors} failed)` : ''}`).catch(() => {});
       }
 
-      await interaction.editReply(`✅ Uploaded **${uploaded}** photo(s) to Monday.com${errors > 0 ? ` (${errors} failed)` : ''}`);
+      await statusMsg.edit(`✅ Uploaded **${uploaded}** photo(s) to Monday.com${errors > 0 ? ` (${errors} failed)` : ''}`);
     } catch (error) {
-      try { await interaction.editReply(`❌ Failed: ${error.message}`); } catch {}
+      await statusMsg.edit(`❌ Photo upload failed: ${error.message}`).catch(() => {});
     }
     photoSessions.delete(sessionKey);
     return;
