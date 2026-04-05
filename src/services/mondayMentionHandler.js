@@ -2,7 +2,7 @@
 // Handles @MondayBot mentions in Discord
 
 import { getThreadId } from './threadMapper.js';
-import { addUpdate, uploadFile, updateColumn, getItem, uploadFileToUpdate } from './mondayApi.js';
+import { addUpdate, uploadFileToUpdate, updateColumn, getItem } from './mondayApi.js';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, EmbedBuilder } from 'discord.js';
 import sharp from 'sharp';
 
@@ -217,25 +217,24 @@ async function handleAttachCommand(message, mondayItemId, caption) {
     return;
   }
 
-  // Upload each attachment
+  // Create update first, then attach files to it
+  const updateText = `**From ${getNickname(message)} (Discord):**\n${caption || `${attachments.length} file(s) attached`}`;
+  const update = await addUpdate(mondayItemId, updateText);
+
+  let uploaded = 0;
   for (const attachment of attachments) {
     try {
-      await uploadFile(mondayItemId, attachment.url, attachment.name);
+      const fileName = attachment.name.replace(/\.[^.]+$/, '.jpeg') || `file-${uploaded + 1}.jpeg`;
+      await uploadFileToUpdate(update.id, attachment.url, fileName);
+      uploaded++;
       console.log(`[MondayBot] Uploaded file "${attachment.name}" to Monday item ${mondayItemId}`);
     } catch (error) {
       console.error(`[MondayBot] Error uploading file "${attachment.name}":`, error);
     }
   }
 
-  // If caption provided, also add as update
-  if (caption && caption.length > 0) {
-    const updateText = `**From ${getNickname(message)} (Discord):**\n${caption}\n\n_${attachments.length} file(s) attached_`;
-    await addUpdate(mondayItemId, updateText);
-  }
-
-  // Confirm in Discord
   await message.react('✅');
-  await message.reply(`✅ Uploaded ${attachments.length} file(s) to Monday.com`);
+  await message.reply(`✅ Uploaded ${uploaded} of ${attachments.length} file(s) to Monday.com`);
 }
 
 /**
