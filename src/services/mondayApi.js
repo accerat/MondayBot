@@ -76,7 +76,7 @@ export async function uploadFileToUpdate(updateId, fileUrl, fileName) {
     fileName = fileName.replace(/\.[^.]+$/, '.jpeg') || fileName + '.jpeg';
   }
 
-  // Build multipart form using form-data package (Node 18 native FormData doesn't work with Monday API)
+  // Build multipart form using form-data package with its built-in submit
   const query = `mutation ($file: File!) { add_file_to_update (update_id: ${updateId}, file: $file) { id } }`;
 
   const form = new FormData();
@@ -86,22 +86,29 @@ export async function uploadFileToUpdate(updateId, fileUrl, fileName) {
     contentType: 'image/jpeg',
   });
 
-  const response = await fetch(MONDAY_API_URL, {
-    method: 'POST',
-    headers: {
-      'Authorization': MONDAY_API_TOKEN,
-      ...form.getHeaders(),
-    },
-    body: form.getBuffer(),
+  // Use form-data's submit which handles multipart correctly
+  const data = await new Promise((resolve, reject) => {
+    form.submit({
+      host: 'api.monday.com',
+      path: '/v2',
+      protocol: 'https:',
+      headers: {
+        'Authorization': MONDAY_API_TOKEN,
+      }
+    }, (err, res) => {
+      if (err) return reject(err);
+      let body = '';
+      res.on('data', chunk => body += chunk);
+      res.on('end', () => {
+        try {
+          resolve(JSON.parse(body));
+        } catch {
+          reject(new Error(`Monday.com returned non-JSON: ${body.substring(0, 200)}`));
+        }
+      });
+      res.on('error', reject);
+    });
   });
-
-  const text = await response.text();
-  let data;
-  try {
-    data = JSON.parse(text);
-  } catch {
-    throw new Error(`Monday.com file upload returned non-JSON: ${text.substring(0, 200)}`);
-  }
 
   if (data.errors) {
     throw new Error(`Monday.com file upload error: ${JSON.stringify(data.errors)}`);
