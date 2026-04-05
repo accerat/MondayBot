@@ -2,6 +2,7 @@
 // Monday.com API client for sending updates from Discord
 
 import sharp from 'sharp';
+import FormData from 'form-data';
 
 const MONDAY_API_TOKEN = process.env.MONDAY_API_TOKEN;
 const MONDAY_API_URL = 'https://api.monday.com/v2';
@@ -75,19 +76,23 @@ export async function uploadFileToUpdate(updateId, fileUrl, fileName) {
     fileName = fileName.replace(/\.[^.]+$/, '.jpeg') || fileName + '.jpeg';
   }
 
-  // Build multipart form using native FormData (Node 18+)
+  // Build multipart form using form-data package (Node 18 native FormData doesn't work with Monday API)
   const query = `mutation ($file: File!) { add_file_to_update (update_id: ${updateId}, file: $file) { id } }`;
 
-  const formData = new FormData();
-  formData.append('query', query);
-  formData.append('variables[file]', new Blob([fileBuffer], { type: 'image/jpeg' }), fileName);
+  const form = new FormData();
+  form.append('query', query);
+  form.append('variables[file]', fileBuffer, {
+    filename: fileName,
+    contentType: 'image/jpeg',
+  });
 
   const response = await fetch(MONDAY_API_URL, {
     method: 'POST',
     headers: {
       'Authorization': MONDAY_API_TOKEN,
+      ...form.getHeaders(),
     },
-    body: formData
+    body: form.getBuffer(),
   });
 
   const text = await response.text();
