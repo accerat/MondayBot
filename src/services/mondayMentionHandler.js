@@ -537,23 +537,21 @@ async function showPhotoPage(interaction, sessionKey, isUpdate = false) {
   const pagePhotos = photos.slice(start, start + PAGE_SIZE);
 
   // Which photo to show large — default to first on page
-  const previewIdx = (preview !== undefined && preview >= start && preview < start + pagePhotos.length)
-    ? preview : start;
+  // Header embed
+  const headerEmbed = new EmbedBuilder()
+    .setTitle(`📸 Select Photos (${selected.size} selected)`)
+    .setDescription(`Page ${page + 1} of ${totalPages} • ${photos.length} total photos\nTap a number to select/deselect`)
+    .setColor(0x00b0f4);
 
-  const lines = pagePhotos.map((p, i) => {
+  // One embed per photo with full-size image
+  const photoEmbeds = pagePhotos.map((p, i) => {
     const idx = start + i;
     const check = selected.has(idx) ? '✅' : '⬜';
-    const pointer = idx === previewIdx ? '👁️' : '';
     const time = new Date(p.timestamp).toLocaleString('en-US', { timeZone: 'America/Chicago', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-    return `${check} **${i + 1}.** ${p.name} — ${p.author} (${time}) ${pointer}`;
+    return new EmbedBuilder()
+      .setDescription(`${check} **${i + 1}.** ${p.author} — ${time}`)
+      .setImage(p.url);
   });
-
-  const previewPhoto = photos[previewIdx];
-  const embed = new EmbedBuilder()
-    .setTitle(`📸 Select Photos (${selected.size} selected)`)
-    .setDescription(lines.join('\n'))
-    .setImage(previewPhoto?.url || null)
-    .setFooter({ text: `Showing photo ${(previewIdx - start) + 1} • Page ${page + 1}/${totalPages} • ${photos.length} total` });
 
   // Toggle buttons — one row of up to 5
   const toggleRow = new ActionRowBuilder();
@@ -584,7 +582,7 @@ async function showPhotoPage(interaction, sessionKey, isUpdate = false) {
     new ButtonBuilder().setCustomId(`mb:pcancel:${sessionKey}`).setLabel('Cancel').setStyle(ButtonStyle.Danger),
   );
 
-  const payload = { embeds: [embed], components: [toggleRow, navRow] };
+  const payload = { embeds: [headerEmbed, ...photoEmbeds], components: [toggleRow, navRow] };
   if (isUpdate) await interaction.update(payload);
   else await interaction.editReply(payload);
 }
