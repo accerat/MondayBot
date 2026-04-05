@@ -449,6 +449,7 @@ export async function handleMondayBotButton(interaction) {
     } else {
       session.selected.add(photoIndex);
     }
+    session.preview = photoIndex;
     await showPhotoPage(interaction, sessionKey, true);
     return;
   }
@@ -526,48 +527,45 @@ export async function handleMondayBotModal(interaction) {
 }
 
 // ── Photo Page UI ──
-const PAGE_SIZE = 10;
+const PAGE_SIZE = 5;
 
 async function showPhotoPage(interaction, sessionKey, isUpdate = false) {
   const session = photoSessions.get(sessionKey);
-  const { photos, selected, page } = session;
+  const { photos, selected, page, preview } = session;
   const totalPages = Math.ceil(photos.length / PAGE_SIZE);
   const start = page * PAGE_SIZE;
   const pagePhotos = photos.slice(start, start + PAGE_SIZE);
 
-  // Build description: numbered list of photos on this page
+  // Which photo to show large — default to first on page
+  const previewIdx = (preview !== undefined && preview >= start && preview < start + pagePhotos.length)
+    ? preview : start;
+
   const lines = pagePhotos.map((p, i) => {
     const idx = start + i;
     const check = selected.has(idx) ? '✅' : '⬜';
+    const pointer = idx === previewIdx ? '👁️' : '';
     const time = new Date(p.timestamp).toLocaleString('en-US', { timeZone: 'America/Chicago', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-    return `${check} **${i + 1}.** ${p.name} — by ${p.author} (${time})`;
+    return `${check} **${i + 1}.** ${p.name} — ${p.author} (${time}) ${pointer}`;
   });
 
+  const previewPhoto = photos[previewIdx];
   const embed = new EmbedBuilder()
-    .setTitle(`📸 Select Photos to Send (${selected.size} selected)`)
+    .setTitle(`📸 Select Photos (${selected.size} selected)`)
     .setDescription(lines.join('\n'))
-    .setFooter({ text: `Page ${page + 1} of ${totalPages} • ${photos.length} total photos` });
+    .setImage(previewPhoto?.url || null)
+    .setFooter({ text: `Showing photo ${(previewIdx - start) + 1} • Page ${page + 1}/${totalPages} • ${photos.length} total` });
 
-  // Show first photo on current page as thumbnail
-  if (pagePhotos[0]) embed.setThumbnail(pagePhotos[0].url);
-
-  // Toggle buttons — 2 rows of 5 (for up to 10 photos per page)
-  const rows = [];
-  for (let rowStart = 0; rowStart < pagePhotos.length; rowStart += 5) {
-    const rowPhotos = pagePhotos.slice(rowStart, rowStart + 5);
-    const row = new ActionRowBuilder();
-    rowPhotos.forEach((p, i) => {
-      const idx = start + rowStart + i;
-      const isSelected = selected.has(idx);
-      row.addComponents(
-        new ButtonBuilder()
-          .setCustomId(`mb:ptoggle:${idx}:${sessionKey}`)
-          .setLabel(`${rowStart + i + 1}`)
-          .setStyle(isSelected ? ButtonStyle.Success : ButtonStyle.Secondary)
-      );
-    });
-    rows.push(row);
-  }
+  // Toggle buttons — one row of up to 5
+  const toggleRow = new ActionRowBuilder();
+  pagePhotos.forEach((p, i) => {
+    const idx = start + i;
+    toggleRow.addComponents(
+      new ButtonBuilder()
+        .setCustomId(`mb:ptoggle:${idx}:${sessionKey}`)
+        .setLabel(`${selected.has(idx) ? '✅' : '⬜'} ${i + 1}`)
+        .setStyle(selected.has(idx) ? ButtonStyle.Success : ButtonStyle.Secondary)
+    );
+  });
 
   // Navigation + action row
   const navRow = new ActionRowBuilder();
@@ -585,9 +583,8 @@ async function showPhotoPage(interaction, sessionKey, isUpdate = false) {
       .setDisabled(selected.size === 0),
     new ButtonBuilder().setCustomId(`mb:pcancel:${sessionKey}`).setLabel('Cancel').setStyle(ButtonStyle.Danger),
   );
-  rows.push(navRow);
 
-  const payload = { embeds: [embed], components: rows };
+  const payload = { embeds: [embed], components: [toggleRow, navRow] };
   if (isUpdate) await interaction.update(payload);
   else await interaction.editReply(payload);
 }
