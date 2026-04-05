@@ -90,7 +90,7 @@ export async function uploadFileToUpdate(updateId, fileUrl, fileName) {
   const data = await new Promise((resolve, reject) => {
     form.submit({
       host: 'api.monday.com',
-      path: '/v2',
+      path: '/v2/file',
       protocol: 'https:',
       headers: {
         'Authorization': MONDAY_API_TOKEN,
