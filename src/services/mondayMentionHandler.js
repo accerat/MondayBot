@@ -394,10 +394,10 @@ export async function handleMondayBotButton(interaction) {
 
     const sessionKey = `${interaction.user.id}_${mondayItemId}`;
     photoSessions.set(sessionKey, {
-      photos, selected: new Set(), currentIndex: 0, mondayItemId,
+      photos, selected: new Set(), page: 0, mondayItemId,
     });
 
-    await showPhotoSelector(interaction, sessionKey);
+    await showPhotoPage(interaction, sessionKey);
     return;
   }
 
@@ -436,34 +436,47 @@ export async function handleMondayBotButton(interaction) {
     return;
   }
 
-  // ── Photo Include/Skip ──
-  if (id.startsWith('mb:photo_include:') || id.startsWith('mb:photo_skip:')) {
+  // ── Photo Toggle (select/deselect a photo by index) ──
+  if (id.startsWith('mb:ptoggle:')) {
     const parts = id.split(':');
-    const action = parts[1]; // photo_include or photo_skip
-    const sessionKey = parts.slice(2).join(':');
+    const photoIndex = parseInt(parts[2]);
+    const sessionKey = parts.slice(3).join(':');
     const session = photoSessions.get(sessionKey);
-    if (!session) {
-      return interaction.update({ content: '❌ Session expired. Tag @MondayBot again to start over.', embeds: [], components: [] });
-    }
-    if (action === 'photo_include') session.selected.add(session.currentIndex);
-    session.currentIndex++;
+    if (!session) return interaction.update({ content: '❌ Session expired. Tag @MondayBot again.', embeds: [], components: [] });
 
-    if (session.currentIndex >= session.photos.length) {
-      await showPhotoSummary(interaction, sessionKey);
+    if (session.selected.has(photoIndex)) {
+      session.selected.delete(photoIndex);
     } else {
-      await showPhotoSelector(interaction, sessionKey, true);
+      session.selected.add(photoIndex);
     }
+    await showPhotoPage(interaction, sessionKey, true);
     return;
   }
 
-  // ── Photo Confirm ──
-  if (id.startsWith('mb:photo_confirm:')) {
-    const sessionKey = id.replace('mb:photo_confirm:', '');
+  // ── Photo Page Navigation ──
+  if (id.startsWith('mb:ppage:')) {
+    const parts = id.split(':');
+    const dir = parts[2]; // prev or next
+    const sessionKey = parts.slice(3).join(':');
     const session = photoSessions.get(sessionKey);
-    if (!session) {
-      return interaction.update({ content: '❌ Session expired.', embeds: [], components: [] });
+    if (!session) return interaction.update({ content: '❌ Session expired.', embeds: [], components: [] });
+
+    if (dir === 'next') session.page++;
+    else if (dir === 'prev') session.page--;
+    await showPhotoPage(interaction, sessionKey, true);
+    return;
+  }
+
+  // ── Photo Send Selected ──
+  if (id.startsWith('mb:psend:')) {
+    const sessionKey = id.replace('mb:psend:', '');
+    const session = photoSessions.get(sessionKey);
+    if (!session) return interaction.update({ content: '❌ Session expired.', embeds: [], components: [] });
+    if (session.selected.size === 0) {
+      return interaction.update({ content: '❌ No photos selected. Tap the numbered buttons to select photos first.', embeds: [], components: [] });
     }
-    await interaction.update({ content: '⏳ Uploading photos to Monday.com...', embeds: [], components: [] });
+
+    await interaction.update({ content: `⏳ Uploading ${session.selected.size} photo(s) to Monday.com...`, embeds: [], components: [] });
 
     try {
       const selectedPhotos = [...session.selected].map(i => session.photos[i]);
@@ -490,8 +503,8 @@ export async function handleMondayBotButton(interaction) {
   }
 
   // ── Photo Cancel ──
-  if (id.startsWith('mb:photo_cancel:')) {
-    const sessionKey = id.replace('mb:photo_cancel:', '');
+  if (id.startsWith('mb:pcancel:')) {
+    const sessionKey = id.replace('mb:pcancel:', '');
     photoSessions.delete(sessionKey);
     await interaction.update({ content: '❌ Cancelled.', embeds: [], components: [] });
     return;
@@ -512,42 +525,71 @@ export async function handleMondayBotModal(interaction) {
   }
 }
 
-// ── Photo Selector UI ──
+// ── Photo Page UI ──
+const PAGE_SIZE = 10;
 
-async function showPhotoSelector(interaction, sessionKey, isUpdate = false) {
+async function showPhotoPage(interaction, sessionKey, isUpdate = false) {
   const session = photoSessions.get(sessionKey);
-  const photo = session.photos[session.currentIndex];
-  const total = session.photos.length;
-  const current = session.currentIndex + 1;
+  const { photos, selected, page } = session;
+  const totalPages = Math.ceil(photos.length / PAGE_SIZE);
+  const start = page * PAGE_SIZE;
+  const pagePhotos = photos.slice(start, start + PAGE_SIZE);
+
+  // Build description: numbered list of photos on this page
+  const lines = pagePhotos.map((p, i) => {
+    const idx = start + i;
+    const check = selected.has(idx) ? '✅' : '⬜';
+    const time = new Date(p.timestamp).toLocaleString('en-US', { timeZone: 'America/Chicago', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    return `${check} **${i + 1}.** ${p.name} — by ${p.author} (${time})`;
+  });
 
   const embed = new EmbedBuilder()
-    .setTitle(`Photo ${current} of ${total}`)
-    .setDescription(`By **${photo.author}** — ${session.selected.size} selected so far`)
-    .setImage(photo.url)
-    .setFooter({ text: photo.name });
+    .setTitle(`📸 Select Photos to Send (${selected.size} selected)`)
+    .setDescription(lines.join('\n'))
+    .setFooter({ text: `Page ${page + 1} of ${totalPages} • ${photos.length} total photos` });
 
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`mb:photo_include:${sessionKey}`).setLabel('✅ Include').setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId(`mb:photo_skip:${sessionKey}`).setLabel('❌ Skip').setStyle(ButtonStyle.Secondary),
+  // Show first photo on current page as thumbnail
+  if (pagePhotos[0]) embed.setThumbnail(pagePhotos[0].url);
+
+  // Toggle buttons — 2 rows of 5 (for up to 10 photos per page)
+  const rows = [];
+  for (let rowStart = 0; rowStart < pagePhotos.length; rowStart += 5) {
+    const rowPhotos = pagePhotos.slice(rowStart, rowStart + 5);
+    const row = new ActionRowBuilder();
+    rowPhotos.forEach((p, i) => {
+      const idx = start + rowStart + i;
+      const isSelected = selected.has(idx);
+      row.addComponents(
+        new ButtonBuilder()
+          .setCustomId(`mb:ptoggle:${idx}:${sessionKey}`)
+          .setLabel(`${rowStart + i + 1}`)
+          .setStyle(isSelected ? ButtonStyle.Success : ButtonStyle.Secondary)
+      );
+    });
+    rows.push(row);
+  }
+
+  // Navigation + action row
+  const navRow = new ActionRowBuilder();
+  if (page > 0) {
+    navRow.addComponents(new ButtonBuilder().setCustomId(`mb:ppage:prev:${sessionKey}`).setLabel('◀ Prev').setStyle(ButtonStyle.Secondary));
+  }
+  if (page < totalPages - 1) {
+    navRow.addComponents(new ButtonBuilder().setCustomId(`mb:ppage:next:${sessionKey}`).setLabel('Next ▶').setStyle(ButtonStyle.Secondary));
+  }
+  navRow.addComponents(
+    new ButtonBuilder()
+      .setCustomId(`mb:psend:${sessionKey}`)
+      .setLabel(`Send ${selected.size} to Monday`)
+      .setStyle(ButtonStyle.Success)
+      .setDisabled(selected.size === 0),
+    new ButtonBuilder().setCustomId(`mb:pcancel:${sessionKey}`).setLabel('Cancel').setStyle(ButtonStyle.Danger),
   );
+  rows.push(navRow);
 
-  const payload = { embeds: [embed], components: [row] };
+  const payload = { embeds: [embed], components: rows };
   if (isUpdate) await interaction.update(payload);
   else await interaction.editReply(payload);
-}
-
-async function showPhotoSummary(interaction, sessionKey) {
-  const session = photoSessions.get(sessionKey);
-  const count = session.selected.size;
-  if (count === 0) {
-    photoSessions.delete(sessionKey);
-    return interaction.update({ content: '❌ No photos selected.', embeds: [], components: [] });
-  }
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`mb:photo_confirm:${sessionKey}`).setLabel(`Send ${count} Photo${count > 1 ? 's' : ''} to Monday`).setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId(`mb:photo_cancel:${sessionKey}`).setLabel('Cancel').setStyle(ButtonStyle.Danger),
-  );
-  await interaction.update({ content: `**Ready to send ${count} of ${session.photos.length} photos** to Monday.com`, embeds: [], components: [row] });
 }
 
 function helpText() {
