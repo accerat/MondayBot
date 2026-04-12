@@ -354,6 +354,26 @@ function parseProjectItem(item, boardName) {
  * @param {number} limit - Max updates to fetch (default 25)
  * @returns {Promise<Array>} List of updates with id, text_body, created_at, creator
  */
+/**
+ * Get assets (files/images) for a specific Monday.com update
+ */
+export async function getUpdateAssets(updateId) {
+  const query = `
+    query ($updateId: [ID!]) {
+      updates (ids: $updateId) {
+        assets {
+          id
+          name
+          url
+          file_extension
+        }
+      }
+    }
+  `;
+  const result = await mondayRequest(query, { updateId: [updateId] });
+  return result.updates?.[0]?.assets || [];
+}
+
 export async function getItemUpdates(itemId, limit = 25) {
   const query = `
     query ($itemId: [ID!], $limit: Int!) {
@@ -366,6 +386,12 @@ export async function getItemUpdates(itemId, limit = 25) {
             id
             name
           }
+          assets {
+            id
+            name
+            url
+            file_extension
+          }
           replies {
             id
             text_body
@@ -373,6 +399,12 @@ export async function getItemUpdates(itemId, limit = 25) {
             creator {
               id
               name
+            }
+            assets {
+              id
+              name
+              url
+              file_extension
             }
           }
         }

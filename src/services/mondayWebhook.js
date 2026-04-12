@@ -1,9 +1,9 @@
 // src/services/mondayWebhook.js
 // Handles incoming webhooks from Monday.com and posts to Discord
 
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, AttachmentBuilder } from 'discord.js';
 import { getThreadId, findThreadByMondayId, findExistingThreadByName, mapThread } from './threadMapper.js';
-import { getItem, getUserName } from './mondayApi.js';
+import { getItem, getUserName, getUpdateAssets } from './mondayApi.js';
 import { shouldFlagItem, markItemFlagged, markItemResolved } from './flagTracker.js';
 import { incrementStat } from '../jobs/weeklySummary.js';
 import { buildFieldsFromItemDetails, formatPinnedPost, pinStarterMessage, updatePinnedPost } from './pinnedPostFormatter.js';
@@ -341,6 +341,39 @@ async function handleNewUpdate(thread, event, itemId, itemDetails) {
 
   await thread.send({ content: message, components: [replyButton] });
   console.log(`[Webhook] Posted comment to thread ${thread.id}: "${updateText.substring(0, 50)}..." from ${author}`);
+
+  // Check for images/files attached to this update
+  try {
+    const updateId = event.updateId || event.id;
+    if (updateId) {
+      const assets = await getUpdateAssets(updateId);
+      const imageAssets = assets.filter(a =>
+        /\.(jpg|jpeg|png|gif|webp)$/i.test(a.name) ||
+        ['jpg','jpeg','png','gif','webp'].includes(a.file_extension?.toLowerCase())
+      );
+      if (imageAssets.length > 0) {
+        // Download and forward images as Discord attachments
+        const files = [];
+        for (const asset of imageAssets.slice(0, 10)) { // max 10
+          try {
+            const res = await fetch(asset.url);
+            if (res.ok) {
+              const buffer = Buffer.from(await res.arrayBuffer());
+              files.push(new AttachmentBuilder(buffer, { name: asset.name }));
+            }
+          } catch (err) {
+            console.error(`[Webhook] Failed to download asset ${asset.name}:`, err.message);
+          }
+        }
+        if (files.length > 0) {
+          await thread.send({ content: `📎 **${files.length} image(s) from ${author}**`, files });
+          console.log(`[Webhook] Forwarded ${files.length} image(s) to thread ${thread.id}`);
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[Webhook] Error forwarding images:', err.message);
+  }
 }
 
 /**

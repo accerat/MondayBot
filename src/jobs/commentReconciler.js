@@ -9,7 +9,7 @@ import { getItemUpdates } from '../services/mondayApi.js';
 import { getDiscordUser } from '../services/crewMapping.js';
 import { getItem } from '../services/mondayApi.js';
 import { updateAllPinnedPosts } from '../services/projectSyncOrchestrator.js';
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, AttachmentBuilder } from 'discord.js';
 
 const TZ = process.env.TIMEZONE || 'America/Chicago';
 const OPS_LEADERSHIP_ID = '1411793485799096490';
@@ -199,4 +199,29 @@ async function postMissedComment(thread, mondayItemId, update) {
 
   await thread.send({ content: message, components: [replyButton] });
   console.log(`[comment-reconciler] Posted recovered comment to thread ${thread.id}`);
+
+  // Forward any images attached to this update
+  const imageAssets = (update.assets || []).filter(a =>
+    /\.(jpg|jpeg|png|gif|webp)$/i.test(a.name) ||
+    ['jpg','jpeg','png','gif','webp'].includes(a.file_extension?.toLowerCase())
+  );
+  if (imageAssets.length > 0) {
+    try {
+      const files = [];
+      for (const asset of imageAssets.slice(0, 10)) {
+        try {
+          const res = await fetch(asset.url);
+          if (res.ok) {
+            const buffer = Buffer.from(await res.arrayBuffer());
+            files.push(new AttachmentBuilder(buffer, { name: asset.name }));
+          }
+        } catch {}
+      }
+      if (files.length > 0) {
+        await thread.send({ content: `📎 **${files.length} image(s) from ${authorName}**`, files });
+      }
+    } catch (err) {
+      console.error('[comment-reconciler] Error forwarding images:', err.message);
+    }
+  }
 }
