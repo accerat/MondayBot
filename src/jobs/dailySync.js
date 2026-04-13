@@ -3,6 +3,7 @@
 
 import cron from 'node-cron';
 import { getESSProjects, getItem } from '../services/mondayApi.js';
+import { AttachmentBuilder } from 'discord.js';
 import { getThreadId, mapThread, findExistingThreadByName } from '../services/threadMapper.js';
 import { incrementStat } from './weeklySummary.js';
 import { buildFieldsFromItemDetails, formatPinnedPost, pinStarterMessage } from '../services/pinnedPostFormatter.js';
@@ -136,6 +137,34 @@ async function createThreadForProject(project, branch, client) {
 
   // Pin the starter message
   await pinStarterMessage(thread, project.mondayItemId);
+
+  // Post any existing files (permits, etc.)
+  try {
+    const itemDetails = await getItem(project.mondayItemId);
+    const fileColumns = (itemDetails?.column_values || []).filter(c => c.type === 'file' && c.value);
+    if (fileColumns.length > 0) {
+      const assetsResult = await fetch('https://api.monday.com/v2', {
+        method: 'POST',
+        headers: { 'Authorization': process.env.MONDAY_API_TOKEN, 'Content-Type': 'application/json', 'API-Version': '2024-10' },
+        body: JSON.stringify({ query: `{ items(ids: [${project.mondayItemId}]) { assets { id name url file_extension } } }` })
+      }).then(r => r.json());
+      const assets = (assetsResult.data?.items?.[0]?.assets || []).filter(a => /\.(jpg|jpeg|png|gif|webp|pdf)$/i.test(a.name));
+      if (assets.length > 0) {
+        const files = [];
+        for (const asset of assets.slice(0, 10)) {
+          try {
+            const res = await fetch(asset.url);
+            if (res.ok) files.push(new AttachmentBuilder(Buffer.from(await res.arrayBuffer()), { name: asset.name }));
+          } catch {}
+        }
+        if (files.length > 0) {
+          await thread.send({ content: `📎 **Existing files** — ${files.length} file(s)`, files });
+        }
+      }
+    }
+  } catch (err) {
+    console.error(`[daily-sync] Error posting existing files for ${project.name}:`, err.message);
+  }
 
   return thread.id;
 }

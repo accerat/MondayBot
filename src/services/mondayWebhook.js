@@ -582,6 +582,50 @@ async function flagBranchIssue(itemId, itemDetails, reason, discordClient) {
 }
 
 /**
+ * Post existing files from file columns (Building Permit, etc.) to a thread.
+ * Called after thread creation to ensure pre-existing data is shared.
+ */
+async function postExistingFiles(thread, itemId, itemDetails) {
+  try {
+    const fileColumns = (itemDetails.column_values || []).filter(c => c.type === 'file' && c.value);
+    if (fileColumns.length === 0) return;
+
+    // Get all assets for this item
+    const assetsResult = await fetch('https://api.monday.com/v2', {
+      method: 'POST',
+      headers: { 'Authorization': process.env.MONDAY_API_TOKEN, 'Content-Type': 'application/json', 'API-Version': '2024-10' },
+      body: JSON.stringify({ query: `{ items(ids: [${itemId}]) { assets { id name url file_extension } } }` })
+    }).then(r => r.json());
+
+    const allAssets = assetsResult.data?.items?.[0]?.assets || [];
+    if (allAssets.length === 0) return;
+
+    // Post assets as attachments
+    const imageAssets = allAssets.filter(a => /\.(jpg|jpeg|png|gif|webp|pdf)$/i.test(a.name));
+    if (imageAssets.length === 0) return;
+
+    const files = [];
+    for (const asset of imageAssets.slice(0, 10)) {
+      try {
+        const res = await fetch(asset.url);
+        if (res.ok) {
+          const buffer = Buffer.from(await res.arrayBuffer());
+          files.push(new AttachmentBuilder(buffer, { name: asset.name }));
+        }
+      } catch {}
+    }
+
+    if (files.length > 0) {
+      const colNames = fileColumns.map(c => c.title || c.id).join(', ');
+      await thread.send({ content: `📎 **Existing files** (${colNames}) — ${files.length} file(s)`, files });
+      console.log(`[Webhook] Posted ${files.length} existing file(s) to new thread ${thread.id}`);
+    }
+  } catch (err) {
+    console.error(`[Webhook] Error posting existing files for item ${itemId}:`, err.message);
+  }
+}
+
+/**
  * Create a new Discord thread for a Monday.com item.
  * Uses the rich pinned-post format and pins the starter message.
  */
@@ -634,6 +678,9 @@ async function createDiscordThread(itemId, itemDetails, discordClient) {
 
     // Pin the starter message and store its ID
     await pinStarterMessage(thread, itemId);
+
+    // Post any existing files (permits, etc.) that were already on the item
+    await postExistingFiles(thread, itemId, itemDetails);
 
     // Track stat
     await incrementStat('threadsCreated');
