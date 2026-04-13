@@ -14,8 +14,8 @@ import { ActionRowBuilder, ButtonBuilder, ButtonStyle, AttachmentBuilder } from 
 const TZ = process.env.TIMEZONE || 'America/Chicago';
 const OPS_LEADERSHIP_ID = '1411793485799096490';
 
-// How far back to look (25 hours to ensure no gaps around midnight)
-const LOOKBACK_MS = 25 * 60 * 60 * 1000;
+// How far back to look (30 minutes — runs every 15 min so 2x overlap for safety)
+const LOOKBACK_MS = 30 * 60 * 1000;
 
 /**
  * Initialize the comment reconciler cron job
