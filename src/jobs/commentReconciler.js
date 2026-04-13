@@ -210,7 +210,7 @@ async function postMissedComment(thread, mondayItemId, update) {
       const files = [];
       for (const asset of imageAssets.slice(0, 10)) {
         try {
-          const res = await fetch(asset.url);
+          const res = await fetch(asset.public_url || asset.url);
           if (res.ok) {
             const buffer = Buffer.from(await res.arrayBuffer());
             files.push(new AttachmentBuilder(buffer, { name: asset.name }));

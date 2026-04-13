@@ -365,6 +365,7 @@ export async function getUpdateAssets(updateId) {
           id
           name
           url
+          public_url
           file_extension
         }
       }
@@ -390,6 +391,7 @@ export async function getItemUpdates(itemId, limit = 25) {
             id
             name
             url
+            public_url
             file_extension
           }
           replies {

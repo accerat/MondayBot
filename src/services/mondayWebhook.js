@@ -173,7 +173,7 @@ async function handleColumnUpdate(thread, event, itemId, itemDetails) {
 
     if (fileColumns.length > 0) {
       // Fetch all assets for the item
-      const assetsQuery = `query { items(ids: [${itemId}]) { assets { id name url file_extension } } }`;
+      const assetsQuery = `query { items(ids: [${itemId}]) { assets { id name url public_url file_extension } } }`;
       const assetsResult = await fetch('https://api.monday.com/v2', {
         method: 'POST',
         headers: { 'Authorization': process.env.MONDAY_API_TOKEN, 'Content-Type': 'application/json', 'API-Version': '2024-10' },
@@ -189,7 +189,7 @@ async function handleColumnUpdate(thread, event, itemId, itemDetails) {
         const files = [];
         for (const asset of downloadableAssets.slice(0, 10)) {
           try {
-            const res = await fetch(asset.url);
+            const res = await fetch(asset.public_url || asset.url);
             if (res.ok) {
               const buffer = Buffer.from(await res.arrayBuffer());
               files.push(new AttachmentBuilder(buffer, { name: asset.name }));
@@ -401,7 +401,7 @@ async function handleNewUpdate(thread, event, itemId, itemDetails) {
         const files = [];
         for (const asset of imageAssets.slice(0, 10)) { // max 10
           try {
-            const res = await fetch(asset.url);
+            const res = await fetch(asset.public_url || asset.url);
             if (res.ok) {
               const buffer = Buffer.from(await res.arrayBuffer());
               files.push(new AttachmentBuilder(buffer, { name: asset.name }));
@@ -591,7 +591,7 @@ async function postExistingFiles(thread, itemId, itemDetails) {
     const assetsResult = await fetch('https://api.monday.com/v2', {
       method: 'POST',
       headers: { 'Authorization': process.env.MONDAY_API_TOKEN, 'Content-Type': 'application/json', 'API-Version': '2024-10' },
-      body: JSON.stringify({ query: `{ items(ids: [${itemId}]) { assets { id name url file_extension } } }` })
+      body: JSON.stringify({ query: `{ items(ids: [${itemId}]) { assets { id name url public_url file_extension } } }` })
     }).then(r => r.json());
 
     const allAssets = assetsResult.data?.items?.[0]?.assets || [];
@@ -604,7 +604,7 @@ async function postExistingFiles(thread, itemId, itemDetails) {
     const files = [];
     for (const asset of imageAssets.slice(0, 10)) {
       try {
-        const res = await fetch(asset.url);
+        const res = await fetch(asset.public_url || asset.url);
         if (res.ok) {
           const buffer = Buffer.from(await res.arrayBuffer());
           files.push(new AttachmentBuilder(buffer, { name: asset.name }));

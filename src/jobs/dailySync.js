@@ -146,14 +146,14 @@ async function createThreadForProject(project, branch, client) {
       const assetsResult = await fetch('https://api.monday.com/v2', {
         method: 'POST',
         headers: { 'Authorization': process.env.MONDAY_API_TOKEN, 'Content-Type': 'application/json', 'API-Version': '2024-10' },
-        body: JSON.stringify({ query: `{ items(ids: [${project.mondayItemId}]) { assets { id name url file_extension } } }` })
+        body: JSON.stringify({ query: `{ items(ids: [${project.mondayItemId}]) { assets { id name url public_url file_extension } } }` })
       }).then(r => r.json());
       const assets = (assetsResult.data?.items?.[0]?.assets || []).filter(a => /\.(jpg|jpeg|png|gif|webp|pdf)$/i.test(a.name));
       if (assets.length > 0) {
         const files = [];
         for (const asset of assets.slice(0, 10)) {
           try {
-            const res = await fetch(asset.url);
+            const res = await fetch(asset.public_url || asset.url);
             if (res.ok) files.push(new AttachmentBuilder(Buffer.from(await res.arrayBuffer()), { name: asset.name }));
           } catch {}
         }
