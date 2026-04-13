@@ -112,6 +112,8 @@ export async function handleMondayWebhook(payload, discordClient) {
  */
 async function handleColumnUpdate(thread, event, itemId, itemDetails) {
   const columnTitle = event.columnTitle || event.column_title || 'Field';
+  const columnId = event.columnId || event.column_id;
+  console.log(`[Webhook] Column update: "${columnTitle}" (${columnId}) for item ${itemId}`);
 
   // Extract value from webhook event — different column types use different structures
   const newValue = extractColumnValue(event.value, event.textValue) ||
@@ -163,52 +165,47 @@ async function handleColumnUpdate(thread, event, itemId, itemDetails) {
   await thread.send(message);
   console.log(`[Webhook] Posted column update to thread ${thread.id}`);
 
-  // 2. If this is a file column, download and post the files to Discord
-  const columnId = event.columnId || event.column_id;
-  if (columnId) {
-    try {
-      const freshItem = await getItem(itemId);
-      const col = freshItem?.column_values?.find(c => c.id === columnId);
-      if (col && col.type === 'file' && col.value) {
-        const parsed = JSON.parse(col.value);
-        const fileEntries = parsed?.files || [];
-        if (fileEntries.length > 0) {
-          // Fetch file assets from the item's file column
-          const assetsQuery = `query { items(ids: [${itemId}]) { assets { id name url file_extension } } }`;
-          const assetsResult = await fetch('https://api.monday.com/v2', {
-            method: 'POST',
-            headers: { 'Authorization': process.env.MONDAY_API_TOKEN, 'Content-Type': 'application/json', 'API-Version': '2024-10' },
-            body: JSON.stringify({ query: assetsQuery })
-          }).then(r => r.json());
+  // 2. If this looks like a file column (Building Permit, etc.), download and post files
+  try {
+    // Check if the changed column is a file type by looking at item details
+    const freshItem = await getItem(itemId);
+    const fileColumns = (freshItem?.column_values || []).filter(c => c.type === 'file' && c.value);
 
-          const assets = assetsResult.data?.items?.[0]?.assets || [];
-          const imageAssets = assets.filter(a =>
-            /\.(jpg|jpeg|png|gif|webp|pdf)$/i.test(a.name)
-          );
+    if (fileColumns.length > 0) {
+      // Fetch all assets for the item
+      const assetsQuery = `query { items(ids: [${itemId}]) { assets { id name url file_extension } } }`;
+      const assetsResult = await fetch('https://api.monday.com/v2', {
+        method: 'POST',
+        headers: { 'Authorization': process.env.MONDAY_API_TOKEN, 'Content-Type': 'application/json', 'API-Version': '2024-10' },
+        body: JSON.stringify({ query: assetsQuery })
+      }).then(r => r.json());
 
-          if (imageAssets.length > 0) {
-            const files = [];
-            for (const asset of imageAssets.slice(0, 10)) {
-              try {
-                const res = await fetch(asset.url);
-                if (res.ok) {
-                  const buffer = Buffer.from(await res.arrayBuffer());
-                  files.push(new AttachmentBuilder(buffer, { name: asset.name }));
-                }
-              } catch (err) {
-                console.error(`[Webhook] Failed to download file ${asset.name}:`, err.message);
-              }
+      const assets = assetsResult.data?.items?.[0]?.assets || [];
+      const downloadableAssets = assets.filter(a =>
+        /\.(jpg|jpeg|png|gif|webp|pdf)$/i.test(a.name)
+      );
+
+      if (downloadableAssets.length > 0) {
+        const files = [];
+        for (const asset of downloadableAssets.slice(0, 10)) {
+          try {
+            const res = await fetch(asset.url);
+            if (res.ok) {
+              const buffer = Buffer.from(await res.arrayBuffer());
+              files.push(new AttachmentBuilder(buffer, { name: asset.name }));
             }
-            if (files.length > 0) {
-              await thread.send({ content: `📎 **${columnTitle}** — ${files.length} file(s) uploaded by ${userName}`, files });
-              console.log(`[Webhook] Forwarded ${files.length} file(s) from ${columnTitle} to thread ${thread.id}`);
-            }
+          } catch (err) {
+            console.error(`[Webhook] Failed to download file ${asset.name}:`, err.message);
           }
         }
+        if (files.length > 0) {
+          await thread.send({ content: `📎 **${columnTitle}** — ${files.length} file(s) uploaded by ${userName}`, files });
+          console.log(`[Webhook] Forwarded ${files.length} file(s) from ${columnTitle} to thread ${thread.id}`);
+        }
       }
-    } catch (err) {
-      console.error(`[Webhook] Error forwarding file column:`, err.message);
     }
+  } catch (err) {
+    console.error(`[Webhook] Error forwarding file column:`, err.message);
   }
 
   // 3. Edit the pinned post with latest data — re-fetch fresh to ensure mirror columns are current
