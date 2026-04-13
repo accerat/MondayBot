@@ -400,12 +400,6 @@ export async function getItemUpdates(itemId, limit = 25) {
               id
               name
             }
-            assets {
-              id
-              name
-              url
-              file_extension
-            }
           }
         }
       }
