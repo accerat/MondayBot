@@ -93,7 +93,7 @@ Bidirectional sync between Monday.com and Discord:
 |-----|----------|-------------|
 | Daily Sync | 7 AM CT daily | Auto-creates threads for items missing them, posts report |
 | Weekly Summary | 8 AM CT Mondays | Posts weekly stats (threads created, flags, resolutions) |
-| Comment Reconciler | 12:15 AM CT daily | Catches missed webhooks + replies from last 24h |
+| Comment Reconciler | Every 15 min | Catches missed webhooks + replies (30-min lookback) |
 | Pinned Post Refresh | 12:30 AM CT daily | Updates all pinned posts with latest Monday.com data (edit only, no new posts) |
 | Health Monitor | Every 5 min | Checks Monday API + Discord, alerts after 3 failures |
 
@@ -253,9 +253,11 @@ SCHEDULER_MODE=<set to "external" to disable local cron, let central scheduler h
 ## Troubleshooting
 
 ### Webhook not receiving events
-- Check Monday.com automation is active (green)
+- **Check port 3001 is open** in Lightsail firewall (has been closed before, blocking all webhooks)
+- Check Monday.com automation is active (green) and shows activity, not "in progress" stuck
 - Verify AWS IP hasn't changed
 - Check bot logs for incoming webhook messages
+- Test externally: `curl -X POST http://18.118.203.113:3001/webhook/monday -H "Content-Type: application/json" -d '{"challenge":"test"}'`
 
 ### Thread not created
 - Check Branch column value (must be exactly "ESS" or "OPD")
@@ -270,6 +272,18 @@ SCHEDULER_MODE=<set to "external" to disable local cron, let central scheduler h
 ---
 
 ## Session Notes
+
+### 2026-04-13: File Forwarding, Port Fix, Reconciler Frequency, @MondayBot Panel
+- **Port 3001 was closed** in Lightsail firewall — ALL Monday.com webhooks were blocked. Opened port 3001 (and 3002-3007 for other bots).
+- **File column forwarding** — When files are uploaded to Monday.com file columns (Building Permit, etc.), the bot downloads them via `public_url` (S3) and posts as Discord attachments. `protected_static` URLs don't work (require browser auth).
+- **Image forwarding on comments** — Monday.com comment images (assets) are downloaded and posted as Discord attachments alongside the comment text. Uses `getUpdateAssets()` with `public_url`.
+- **Existing files on thread creation** — When a new thread is created and the item already has files, they're downloaded and posted immediately.
+- **Comment reconciler now runs every 15 minutes** (was midnight only) to catch replies faster. Lookback window reduced to 30 minutes.
+- **Fixed reconciler crash** — `assets` field on `Reply` type is not supported by Monday API. Removed from query.
+- **@MondayBot action panel** — Tagging @MondayBot with no text shows buttons: Send Photos to Monday, Forward Recent Messages, Write Update to Monday. Photo selector shows 5 per page as thumbnails with toggle buttons and dates.
+- **Photo upload actually works** — Fixed multipart form (use `form-data` package + `/v2/file` endpoint + `form.submit()`). Photos converted to JPEG via sharp, uploaded 3 at a time in parallel. Progress message posted to thread (not ephemeral).
+- **SCHEDULER_MODE=external** enabled on all bots — local crons disabled, central scheduler is sole source of truth.
+- **Webhook automation** — New "When Building Permit changes" webhook configured on Monday.com board.
 
 ### 2026-04-04: Central Scheduler, Cross-Bot API, Sync Fixes, Reply Forwarding
 - **Central Scheduler** — New service orchestrates all 28 cron jobs across 8 bots sequentially via HTTP. MondayBot jobs: daily-sync, weekly-summary, comment-reconciler, refresh-pinned-posts. Set `SCHEDULER_MODE=external` to disable local cron.

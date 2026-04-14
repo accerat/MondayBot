@@ -27,8 +27,11 @@ const MONDAYBOT_SECTION = `
 - @mention handler: \`@MondayBot update/status/attach/help\`
 - Cross-bot API for DailyReportBot (forward reports + photos to Monday.com)
 - Photo uploads convert to JPEG via sharp before uploading to Monday.com
-- Nightly comment reconciler catches missed webhooks + nested replies
+- Comment reconciler every 15 min catches missed webhooks + nested replies
 - Nightly pinned post refresh keeps project info current
+- File column forwarding: permits/docs downloaded from Monday and posted as Discord attachments
+- Images from Monday comments forwarded as Discord attachments
+- @MondayBot action panel: Send Photos, Forward Messages, Write Update buttons
 - Cycle prevention: Discord→Monday posts are not echoed back
 
 ### Discord Channels
@@ -57,7 +60,7 @@ const MONDAYBOT_SECTION = `
 |-----|----------|----------|
 | Daily Sync | 7:00 AM CT | Create missing threads |
 | Weekly Summary | Mon 8:00 AM CT | Post weekly stats |
-| Comment Reconciler | 12:15 AM CT | Catch missed webhooks + replies |
+| Comment Reconciler | Every 15 min | Catch missed webhooks + replies |
 | Pinned Post Refresh | 12:30 AM CT | Update all pinned posts |
 | Health Monitor | Every 5 min | Check API + Discord health |
 
