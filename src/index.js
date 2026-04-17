@@ -100,7 +100,7 @@ client.on(Events.InteractionCreate, async interaction => {
     const replyText = interaction.fields.getTextInputValue('reply_text');
 
     try {
-      await interaction.deferReply({ flags: 64 }); // ephemeral
+      await interaction.reply({ content: '⏳ **Posting reply to Monday.com...**', flags: 64 });
 
       const updateText = `**From ${interaction.member?.displayName || interaction.user.displayName} (Discord):**\n${replyText}`;
       await addUpdate(itemId, updateText);

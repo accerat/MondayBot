@@ -407,32 +407,34 @@ export async function handleMondayBotButton(interaction) {
       return interaction.reply({ content: '❌ Only Ops/Office/Surveyor roles can do this.', flags: 64 });
     }
     const mondayItemId = id.replace('mb:forward_recent:', '');
-    await interaction.deferReply({ flags: 64 });
+    await interaction.update({ content: '⏳ **Forwarding recent messages to Monday.com...**', components: [] });
 
-    const thread = interaction.channel;
-    const messages = await thread.messages.fetch({ limit: 30 });
-    // Get non-bot messages from the last 24h, newest first
-    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-    const recent = messages
-      .filter(m => !m.author.bot && m.createdTimestamp > cutoff)
-      .sort((a, b) => b.createdTimestamp - a.createdTimestamp)
-      .first(10);
+    try {
+      const thread = interaction.channel;
+      const messages = await thread.messages.fetch({ limit: 30 });
+      const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+      const recent = messages
+        .filter(m => !m.author.bot && m.createdTimestamp > cutoff)
+        .sort((a, b) => b.createdTimestamp - a.createdTimestamp)
+        .first(10);
 
-    if (recent.length === 0) {
-      return interaction.editReply('❌ No recent messages (last 24h) found to forward.');
+      if (recent.length === 0) {
+        return interaction.editReply('❌ No recent messages (last 24h) found to forward.');
+      }
+
+      const lines = recent.map(m => {
+        const author = m.member?.displayName || m.author.displayName || m.author.username;
+        const time = new Date(m.createdTimestamp).toLocaleString('en-US', { timeZone: 'America/Chicago', hour: 'numeric', minute: '2-digit' });
+        const text = m.content || (m.embeds[0]?.description?.substring(0, 200)) || '(attachment)';
+        return `**${author}** (${time}): ${text}`;
+      }).join('\n\n');
+
+      const body = `**Recent Discord Messages (forwarded by ${interaction.member?.displayName || interaction.user.displayName}):**\n\n${lines}`;
+      await addUpdate(mondayItemId, body);
+      await interaction.editReply(`✅ Forwarded ${recent.length} recent message(s) to Monday.com`);
+    } catch (error) {
+      await interaction.editReply(`❌ Failed: ${error.message}`);
     }
-
-    // Format and send
-    const lines = recent.map(m => {
-      const author = m.member?.displayName || m.author.displayName || m.author.username;
-      const time = new Date(m.createdTimestamp).toLocaleString('en-US', { timeZone: 'America/Chicago', hour: 'numeric', minute: '2-digit' });
-      const text = m.content || (m.embeds[0]?.description?.substring(0, 200)) || '(attachment)';
-      return `**${author}** (${time}): ${text}`;
-    }).join('\n\n');
-
-    const body = `**Recent Discord Messages (forwarded by ${interaction.member?.displayName || interaction.user.displayName}):**\n\n${lines}`;
-    await addUpdate(mondayItemId, body);
-    await interaction.editReply(`✅ Forwarded ${recent.length} recent message(s) to Monday.com`);
     return;
   }
 
@@ -530,11 +532,15 @@ export async function handleMondayBotButton(interaction) {
 export async function handleMondayBotModal(interaction) {
   if (interaction.customId.startsWith('mb:update_modal:')) {
     const mondayItemId = interaction.customId.replace('mb:update_modal:', '');
-    await interaction.deferReply({ flags: 64 });
-    const text = interaction.fields.getTextInputValue('update_text');
-    const name = interaction.member?.displayName || interaction.user.displayName;
-    await addUpdate(mondayItemId, `**From ${name} (Discord):**\n${text}`);
-    await interaction.editReply('✅ Update posted to Monday.com');
+    await interaction.reply({ content: '⏳ **Posting update to Monday.com...**', flags: 64 });
+    try {
+      const text = interaction.fields.getTextInputValue('update_text');
+      const name = interaction.member?.displayName || interaction.user.displayName;
+      await addUpdate(mondayItemId, `**From ${name} (Discord):**\n${text}`);
+      await interaction.editReply('✅ Update posted to Monday.com');
+    } catch (error) {
+      await interaction.editReply(`❌ Failed: ${error.message}`);
+    }
   }
 }
 
