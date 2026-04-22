@@ -105,12 +105,16 @@ export async function reconcileComments(client) {
 
         if (!updateText.trim()) continue;
 
-        // Skip updates posted by the bot itself (Discord replies forwarded to Monday)
-        if (updateText.includes('(Discord):')) continue;
+        // Skip updates that originated from Discord (cycle prevention)
+        if (updateText.includes('(Discord):') ||
+            updateText.includes('Photos from Discord') ||
+            updateText.includes('photo(s) from Discord') ||
+            updateText.startsWith('Daily Report —') ||
+            updateText.startsWith('📸')) continue;
 
         // Check if this update's text appears in any bot message
-        // Use first 40 chars of the update text as a fingerprint
-        const fingerprint = updateText.substring(0, 40).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        // Use chars 0-80 as a fingerprint (longer to avoid false matches on short text like @mentions)
+        const fingerprint = updateText.substring(0, 80).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const alreadyPosted = botMessageTexts.some(msg => msg.includes(fingerprint));
 
         if (!alreadyPosted) {
