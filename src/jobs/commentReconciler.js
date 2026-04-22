@@ -107,15 +107,12 @@ export async function reconcileComments(client) {
 
         // Skip updates that originated from Discord (cycle prevention)
         if (updateText.includes('(Discord):') ||
-            updateText.includes('Photos from Discord') ||
-            updateText.includes('photo(s) from Discord') ||
-            updateText.startsWith('Daily Report —') ||
-            updateText.startsWith('📸')) continue;
+            updateText.includes('from Discord') ||
+            updateText.startsWith('Daily Report —')) continue;
 
-        // Check if this update's text appears in any bot message
-        // Use chars 0-80 as a fingerprint (longer to avoid false matches on short text like @mentions)
-        const fingerprint = updateText.substring(0, 80).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const alreadyPosted = botMessageTexts.some(msg => msg.includes(fingerprint));
+        // Check if this update's full text appears in any bot message
+        const escaped = updateText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const alreadyPosted = botMessageTexts.some(msg => msg.includes(escaped));
 
         if (!alreadyPosted) {
           console.log(`[comment-reconciler] Missed comment found: "${updateText.substring(0, 60)}..." from ${authorName} on item ${mondayItemId}`);
