@@ -273,6 +273,14 @@ SCHEDULER_MODE=<set to "external" to disable local cron, let central scheduler h
 
 ## Session Notes
 
+### 2026-04-22: Scheduler Fix, Cycle Prevention, Foreman Verification, Processing Feedback
+- **Scheduler .env was missing** — All scheduled jobs across all bots were failing 401 since SCHEDULER_MODE=external was enabled. Created `.env` on server. Also fixed ESM import ordering: token read at request time via `getToken()` instead of module-level constant.
+- **Cycle prevention improved** — Reconciler now skips updates containing `from Discord` or starting with `Daily Report —`. Photos from Monday.com (native) still forward to Discord. Uses full text match instead of truncated fingerprint for duplicate detection.
+- **Foreman verification fix** — Was tagging whoever last submitted a daily report instead of the actual assigned foreman. Now uses Monday.com crew mapping (shared Google Drive) to resolve correct foreman from `crew_monday` field.
+- **Processing feedback** — All buttons now show immediate visual feedback ("⏳ Sending to Monday...", "⏳ Thinking...") instead of silent defer. Applied to MondayBot, DailyReportBot, and AIBot.
+- **Foreman "No" flow** — Opens modal asking when they'll be on site + reason. Escalates to Ops Leadership + MLB Office in thread and #urgent-schedule-changes. "Yes" only notifies MLB Office in thread. Removed automatic Monday.com forwarding.
+- **Surveyor role** (1473765347005042761) added to Send to Monday button permissions.
+
 ### 2026-04-13: File Forwarding, Port Fix, Reconciler Frequency, @MondayBot Panel
 - **Port 3001 was closed** in Lightsail firewall — ALL Monday.com webhooks were blocked. Opened port 3001 (and 3002-3007 for other bots).
 - **File column forwarding** — When files are uploaded to Monday.com file columns (Building Permit, etc.), the bot downloads them via `public_url` (S3) and posts as Discord attachments. `protected_static` URLs don't work (require browser auth).
