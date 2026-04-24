@@ -139,17 +139,7 @@ export async function reconcileComments(client) {
   const summary = `[comment-reconciler] Complete — Checked: ${checked}, Missed comments posted: ${missed}, Skipped: ${skipped}, Errors: ${errors}`;
   console.log(summary);
 
-  // Post report to flag channel if any comments were missed
-  if (missed > 0) {
-    try {
-      const flagChannel = await client.channels.fetch(process.env.FLAG_CHANNEL_ID);
-      if (flagChannel) {
-        await flagChannel.send(`**Nightly Comment Reconciler**\nRecovered **${missed}** missed comment(s) from Monday.com.\nChecked ${checked} items, ${errors} errors.`);
-      }
-    } catch (err) {
-      console.error('[comment-reconciler] Could not post report:', err.message);
-    }
-  }
+  // Log only — no flag channel posting
 
   return { checked, missed, skipped, errors };
 }

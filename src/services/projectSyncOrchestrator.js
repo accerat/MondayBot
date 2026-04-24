@@ -148,23 +148,9 @@ async function createDiscordThread(projectData, discordClient) {
   // Determine channel based on branch
   const branchResult = getBranchChannelId(projectData);
 
-  // If flagged (no valid branch), send to flag channel
+  // If flagged (no valid branch), log only
   if (branchResult.flagged) {
-    const flagChannelId = process.env.FLAG_CHANNEL_ID;
-    if (flagChannelId) {
-      try {
-        const flagChannel = await discordClient.channels.fetch(flagChannelId);
-        if (flagChannel) {
-          const branchCol = Object.entries(projectData.rawColumns || {}).find(([id]) =>
-            id.toLowerCase().includes('branch') || id === 'dropdown_mm07kqx'
-          );
-          const branchValues = branchCol?.[1]?.text || '(empty)';
-          await flagChannel.send(`⚠️ **Branch Issue** - Item "${projectData.name}" (ID: \`${projectData.mondayItemId}\`)\n**Reason:** ${branchResult.reason}\n**Current Branch Value:** ${branchValues}\n\nPlease set a valid branch (ESS or OPD) in Monday.com. The Discord thread will be created automatically once fixed.`);
-        }
-      } catch (e) {
-        console.error('[sync-discord] Error flagging branch issue:', e);
-      }
-    }
+    console.log(`[sync-discord] Branch issue for "${projectData.name}": ${branchResult.reason}`);
     return {
       created: false,
       existed: false,

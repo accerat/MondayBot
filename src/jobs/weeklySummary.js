@@ -41,30 +41,9 @@ export async function postWeeklySummary(client) {
     return;
   }
 
-  const channel = await client.channels.fetch(channelId);
-  if (!channel) {
-    console.error('[weekly-summary] Could not fetch channel');
-    return;
-  }
-
-  // Calculate week range
-  const now = new Date();
-  const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-
-  // Get current stats
+  // Log only — no flag channel posting
   const stats = await getWeeklyStats();
-
-  let message = `**Weekly MondayBot Summary**\n`;
-  message += `*${weekAgo.toLocaleDateString()} - ${now.toLocaleDateString()}*\n\n`;
-  message += `**Threads Created:** ${stats.threadsCreated}\n`;
-  message += `**Items Flagged:** ${stats.itemsFlagged}\n`;
-  message += `**Flags Resolved:** ${stats.flagsResolved}\n`;
-  message += `**Total Active Mappings:** ${stats.totalMappings}\n`;
-
-  await channel.send(message);
-  console.log('[weekly-summary] Posted summary');
-
-  // Reset weekly counters
+  console.log(`[weekly-summary] Threads: ${stats.threadsCreated}, Flagged: ${stats.itemsFlagged}, Resolved: ${stats.flagsResolved}, Mappings: ${stats.totalMappings}`);
   await resetWeeklyCounters();
 }
 

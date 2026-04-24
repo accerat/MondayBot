@@ -70,10 +70,7 @@ export async function runDailySync(client) {
     }
   }
 
-  // Post summary to flag channel if anything happened
-  if (created.length > 0 || errors.length > 0) {
-    await postDailySyncReport(client, flagChannelId, { created, errors });
-  } else {
+  if (created.length === 0 && errors.length === 0) {
     console.log('[daily-sync] No new items to sync');
   }
 

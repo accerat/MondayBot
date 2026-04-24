@@ -297,24 +297,13 @@ async function handleBranchUpdate(itemId, itemDetails, discordClient) {
  * Post resolution notice to flag channel when a flagged item is fixed
  */
 async function postFlagResolution(itemId, itemDetails, threadId, discordClient) {
-  const flagChannelId = process.env.FLAG_CHANNEL_ID;
-  if (!flagChannelId) return;
-
   try {
-    const channel = await discordClient.channels.fetch(flagChannelId);
-    if (!channel) return;
-
     const itemName = itemDetails.name || `Item ${itemId}`;
-    const message = `**Resolved** - Item "${itemName}" (ID: \`${itemId}\`) now has a valid branch. Thread created: <#${threadId}>`;
-
-    await channel.send(message);
-    console.log(`[Webhook] Posted flag resolution notice for item ${itemId}`);
-
-    // Clear from tracking and track stat
+    console.log(`[Webhook] Flag resolved for item ${itemId} (${itemName}), thread: ${threadId}`);
     await markItemResolved(itemId);
     await incrementStat('flagsResolved');
   } catch (error) {
-    console.error(`[Webhook] Error posting flag resolution:`, error);
+    console.error(`[Webhook] Error resolving flag:`, error);
   }
 }
 
@@ -547,28 +536,8 @@ async function flagBranchIssue(itemId, itemDetails, reason, discordClient) {
       return;
     }
 
-    const flagChannelId = process.env.FLAG_CHANNEL_ID;
-    if (!flagChannelId) {
-      console.error('[Webhook] FLAG_CHANNEL_ID not configured');
-      return;
-    }
-
-    const channel = await discordClient.channels.fetch(flagChannelId);
-    if (!channel) {
-      console.error(`[Webhook] Flag channel ${flagChannelId} not found`);
-      return;
-    }
-
-    const branchCol = itemDetails.column_values?.find(col =>
-      col.title && col.title.toLowerCase() === 'branch'
-    );
-    const branchValues = branchCol?.text || '(empty)';
     const itemName = itemDetails.name || `Item ${itemId}`;
-
-    const message = `**Branch Issue** - Item "${itemName}" (ID: \`${itemId}\`)\n**Reason:** ${reason}\n**Current Branch Value:** ${branchValues}\n\nPlease set a valid branch (ESS or OPD) in Monday.com. The Discord thread will be created automatically once fixed.`;
-
-    await channel.send(message);
-    console.log(`[Webhook] Flagged item ${itemId}: ${reason}`);
+    console.log(`[Webhook] Flagged item ${itemId} (${itemName}): ${reason}`);
 
     // Track that we flagged it
     await markItemFlagged(itemId, itemName, reason);

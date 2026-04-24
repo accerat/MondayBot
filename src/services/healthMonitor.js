@@ -82,21 +82,8 @@ async function sendHealthAlert(client, status) {
   const flagChannelId = process.env.FLAG_CHANNEL_ID;
   if (!flagChannelId) return;
 
-  try {
-    const channel = await client.channels.fetch(flagChannelId);
-    if (!channel) return;
-
-    let message = `**MondayBot Health Alert**\n\n`;
-    message += `**Service Status:**\n`;
-    message += `Monday.com API: ${status.mondayOk ? 'OK' : 'FAILED'}\n`;
-    message += `Discord: ${status.discordOk ? 'OK' : 'FAILED'}\n\n`;
-    message += `Consecutive failures: ${consecutiveFailures}\n`;
-    message += `*This is the first alert today.*`;
-
-    await channel.send(message);
-    console.log('[health-monitor] Sent alert to flag channel');
-  } catch (error) {
-    console.error('[health-monitor] Failed to send alert:', error);
+  // Log only — no flag channel posting
+  console.error(`[health-monitor] ALERT: Monday API: ${status.mondayOk ? 'OK' : 'FAILED'}, Discord: ${status.discordOk ? 'OK' : 'FAILED'}, Failures: ${consecutiveFailures}`);
   }
 }
 
