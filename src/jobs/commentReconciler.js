@@ -105,10 +105,12 @@ export async function reconcileComments(client) {
 
         if (!updateText.trim()) continue;
 
-        // Skip updates that originated from Discord (cycle prevention)
+        // Skip updates that originated from Discord or were posted by our bots (cycle prevention)
         if (updateText.includes('(Discord):') ||
             updateText.includes('from Discord') ||
-            updateText.startsWith('Daily Report —')) continue;
+            updateText.startsWith('Daily Report —') ||
+            updateText.includes('TIMELINE OVERRUN') ||
+            updateText.includes('Foreman ') && updateText.includes('confirmed they will be on site')) continue;
 
         // Check if this update's full text appears in any bot message
         const escaped = updateText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
