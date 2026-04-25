@@ -186,7 +186,7 @@ async function postMissedComment(thread, mondayItemId, update) {
   );
 
   const replyLabel = update.isReply ? ' (reply)' : '';
-  const message = `💬 **New Comment from ${authorName}**${replyLabel} _(recovered)_\n` +
+  const message = `💬 **New Comment from ${authorName}**${replyLabel}\n` +
                   `>>> ${updateText}\n\n` +
                   mentions + crewWarning;
 

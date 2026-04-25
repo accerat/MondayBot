@@ -393,7 +393,16 @@ async function handleNewUpdate(thread, event, itemId, itemDetails) {
         const files = [];
         for (const asset of imageAssets.slice(0, 10)) { // max 10
           try {
-            const res = await fetch(asset.public_url || asset.url);
+            // Try public_url first, fall back to url, retry once
+            let res = await fetch(asset.public_url || asset.url);
+            if (!res.ok && asset.url !== asset.public_url) {
+              res = await fetch(asset.url);
+            }
+            if (!res.ok) {
+              // Retry after 2s
+              await new Promise(r => setTimeout(r, 2000));
+              res = await fetch(asset.public_url || asset.url);
+            }
             if (res.ok) {
               const buffer = Buffer.from(await res.arrayBuffer());
               files.push(new AttachmentBuilder(buffer, { name: asset.name }));

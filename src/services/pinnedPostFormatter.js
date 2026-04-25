@@ -201,7 +201,9 @@ export async function updatePinnedPost(thread, mondayItemId, itemDetails = null,
       await msg.edit(newContent);
       // Ensure it's pinned
       if (!msg.pinned) {
-        try { await msg.pin(); } catch {}
+        try { await msg.pin(); } catch (pinErr) {
+          console.error(`[PinnedPost] Failed to pin for item ${mondayItemId}:`, pinErr.message);
+        }
       }
       // Save the correct message ID
       if (pinnedMsgId !== msg.id) {
