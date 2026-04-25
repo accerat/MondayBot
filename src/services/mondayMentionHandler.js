@@ -9,6 +9,8 @@ import sharp from 'sharp';
 const MLB_OFFICE_ROLE_ID = process.env.MLB_OFFICE_ROLE_ID || '1396930700447449149';
 const OPS_LEADERSHIP_ROLE_ID = '1411793485799096490';
 const SURVEYOR_ROLE_ID = '1473765347005042761';
+const FOREMAN_ROLE_ID = '1396930405541744690';
+const ASSISTANT_FOREMAN_ROLE_ID = '1399146558662115409';
 
 // Photo selection sessions for @MondayBot photo flow
 const photoSessions = new Map();
@@ -267,7 +269,7 @@ All updates include your server nickname and are posted to Monday.com.`;
 }
 
 /**
- * Check if a member has ops/office/surveyor permission
+ * Check if a member has ops/office/surveyor permission (can forward to Monday)
  */
 function hasForwardPermission(member) {
   if (!member) return false;
@@ -278,13 +280,28 @@ function hasForwardPermission(member) {
 }
 
 /**
- * Show action panel when @MondayBot is mentioned with no command
+ * Check if a member is a foreman or assistant foreman
+ */
+function isForeman(member) {
+  if (!member) return false;
+  return member.roles.cache.has(FOREMAN_ROLE_ID) || member.roles.cache.has(ASSISTANT_FOREMAN_ROLE_ID);
+}
+
+/**
+ * Show action panel when @MondayBot is mentioned with no command.
+ * Different buttons based on role:
+ * - Ops/Office/Surveyor: Photos, Forward Messages, Write Update
+ * - Foremen/Assistants: Write Update only
+ * - Everyone else: Write Update only
  */
 async function handleShowPanel(message, mondayItemId) {
   const rows = [];
+  const member = message.member;
+  const canForward = hasForwardPermission(member);
+  const isForemanUser = isForeman(member);
 
-  // Forward buttons for ops/office/surveyor
-  if (hasForwardPermission(message.member)) {
+  // Ops/Office/Surveyor get forwarding tools
+  if (canForward) {
     rows.push(new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId(`mb:photos:${mondayItemId}`)
@@ -299,21 +316,34 @@ async function handleShowPanel(message, mondayItemId) {
     ));
   }
 
-  rows.push(new ActionRowBuilder().addComponents(
+  // Everyone gets Write Update
+  const actionRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(`mb:write_update:${mondayItemId}`)
       .setLabel('Write Update to Monday')
       .setStyle(ButtonStyle.Secondary)
       .setEmoji('📝'),
-    new ButtonBuilder()
-      .setCustomId(`mb:help`)
-      .setLabel('Help')
-      .setStyle(ButtonStyle.Secondary)
-      .setEmoji('❓'),
-  ));
+  );
+
+  // Foremen/assistants also get a quick status button
+  if (isForemanUser || canForward) {
+    actionRow.addComponents(
+      new ButtonBuilder()
+        .setCustomId(`mb:help`)
+        .setLabel('Help')
+        .setStyle(ButtonStyle.Secondary)
+        .setEmoji('❓'),
+    );
+  }
+
+  rows.push(actionRow);
+
+  const greeting = canForward ? '**MondayBot** — What would you like to do?' :
+                   isForemanUser ? '**MondayBot** — Send an update to the office:' :
+                   '**MondayBot** — What would you like to do?';
 
   await message.reply({
-    content: '**MondayBot** — What would you like to do?',
+    content: greeting,
     components: rows,
   });
 }
