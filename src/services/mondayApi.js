@@ -212,11 +212,15 @@ export async function getESSProjects({ createdSince } = {}) {
 
       while (hasMore) {
         // Include group info in the query
-        const query = `query ($boardId: [ID!], $cursor: String) {
+        // Monday API requires either query_params OR cursor, not both
+        const itemsPageArg = cursor
+          ? `items_page(limit: 100, cursor: $cursor)`
+          : `items_page(limit: 100, query_params: {rules: [], operator: and})`;
+        const query = `query ($boardId: [ID!]${cursor ? ', $cursor: String' : ''}) {
           boards(ids: $boardId) {
             id
             name
-            items_page(limit: 100, query_params: {rules: [], operator: and}, cursor: $cursor) {
+            ${itemsPageArg} {
               cursor
               items {
                 id

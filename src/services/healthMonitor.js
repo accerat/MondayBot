@@ -79,12 +79,8 @@ async function checkMondayAPI() {
  * Send health alert to flag channel
  */
 async function sendHealthAlert(client, status) {
-  const flagChannelId = process.env.FLAG_CHANNEL_ID;
-  if (!flagChannelId) return;
-
   // Log only — no flag channel posting
   console.error(`[health-monitor] ALERT: Monday API: ${status.mondayOk ? 'OK' : 'FAILED'}, Discord: ${status.discordOk ? 'OK' : 'FAILED'}, Failures: ${consecutiveFailures}`);
-  }
 }
 
 /**
