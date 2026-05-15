@@ -76,46 +76,63 @@ export async function uploadFileToUpdate(updateId, fileUrl, fileName) {
     fileName = fileName.replace(/\.[^.]+$/, '.jpeg') || fileName + '.jpeg';
   }
 
-  // Build multipart form using form-data package with its built-in submit
   const query = `mutation ($file: File!) { add_file_to_update (update_id: ${updateId}, file: $file) { id } }`;
 
-  const form = new FormData();
-  form.append('query', query);
-  form.append('variables[file]', fileBuffer, {
-    filename: fileName,
-    contentType: 'image/jpeg',
-  });
-
-  // Use form-data's submit which handles multipart correctly
-  const data = await new Promise((resolve, reject) => {
-    form.submit({
-      host: 'api.monday.com',
-      path: '/v2/file',
-      protocol: 'https:',
-      headers: {
-        'Authorization': MONDAY_API_TOKEN,
-      }
-    }, (err, res) => {
-      if (err) return reject(err);
-      let body = '';
-      res.on('data', chunk => body += chunk);
-      res.on('end', () => {
-        try {
-          resolve(JSON.parse(body));
-        } catch {
-          reject(new Error(`Monday.com returned non-JSON: ${body.substring(0, 200)}`));
-        }
+  // Retry up to 3 times on transient Monday.com errors (500, network failures)
+  const MAX_ATTEMPTS = 3;
+  let lastError;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const form = new FormData();
+      form.append('query', query);
+      form.append('variables[file]', fileBuffer, {
+        filename: fileName,
+        contentType: 'image/jpeg',
       });
-      res.on('error', reject);
-    });
-  });
 
-  if (data.errors) {
-    throw new Error(`Monday.com file upload error: ${JSON.stringify(data.errors)}`);
+      const data = await new Promise((resolve, reject) => {
+        form.submit({
+          host: 'api.monday.com',
+          path: '/v2/file',
+          protocol: 'https:',
+          headers: { 'Authorization': MONDAY_API_TOKEN },
+        }, (err, res) => {
+          if (err) return reject(err);
+          let body = '';
+          res.on('data', chunk => body += chunk);
+          res.on('end', () => {
+            try { resolve(JSON.parse(body)); }
+            catch { reject(new Error(`Monday.com returned non-JSON: ${body.substring(0, 200)}`)); }
+          });
+          res.on('error', reject);
+        });
+      });
+
+      if (data.errors) {
+        // Check if it's a retriable error (500, internal server error)
+        const errMsg = JSON.stringify(data.errors);
+        const isRetriable = errMsg.includes('500') || errMsg.includes('INTERNAL_SERVER_ERROR') || errMsg.includes('Internal server error');
+        if (isRetriable && attempt < MAX_ATTEMPTS) {
+          lastError = new Error(`Monday.com file upload error: ${errMsg}`);
+          console.log(`[MondayAPI] Retry ${attempt}/${MAX_ATTEMPTS} for "${fileName}" after error`);
+          await new Promise(r => setTimeout(r, 2000 * attempt)); // exponential backoff
+          continue;
+        }
+        throw new Error(`Monday.com file upload error: ${errMsg}`);
+      }
+
+      console.log(`[MondayAPI] Uploaded file "${fileName}" to update ${updateId}${attempt > 1 ? ` (attempt ${attempt})` : ''}`);
+      return data.data?.add_file_to_update;
+    } catch (err) {
+      lastError = err;
+      if (attempt < MAX_ATTEMPTS) {
+        console.log(`[MondayAPI] Retry ${attempt}/${MAX_ATTEMPTS} for "${fileName}": ${err.message}`);
+        await new Promise(r => setTimeout(r, 2000 * attempt));
+        continue;
+      }
+    }
   }
-
-  console.log(`[MondayAPI] Uploaded file "${fileName}" to update ${updateId}`);
-  return data.data?.add_file_to_update;
+  throw lastError;
 }
 
 /**
