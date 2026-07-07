@@ -79,6 +79,8 @@ Bidirectional sync between Monday.com and Discord:
 - **Crew mapping** - Shared Google Drive mapping (crew name → Discord user ID), loaded on startup
 - **Pinned posts** - Rich project info pinned in each thread (CTL, electrician, dates, materials, etc.)
 - **Cycle prevention** - Discord→Monday posts are detected and not echoed back to Discord
+- **Monday API retry** - All API calls transparently retry on `API_TEMPORARILY_BLOCKED`, rate/complexity/concurrency exceptions, HTTP 429/5xx, and network faults (see `isRetriableMondayError` in `mondayApi.js`)
+- **Batch reconciler** - Uses `getItemUpdatesBatch` (~25 items per API call) instead of per-item loop for much lower API pressure
 
 ### Cross-Bot API (port 3001)
 | Endpoint | Method | Description |
@@ -272,6 +274,22 @@ SCHEDULER_MODE=<set to "external" to disable local cron, let central scheduler h
 ---
 
 ## Session Notes
+
+### 2026-07-07: Doc catch-up — retry system, batch reconciler, DRB/TaskBot/ClockBot growth
+- **Monday API retry system** — `src/services/mondayApi.js` grew a full retry layer after the 2026-07-06 morning outage (`API_TEMPORARILY_BLOCKED` blocked all photo uploads):
+  - `RETRIABLE_PATTERNS`: `API_TEMPORARILY_BLOCKED`, `ComplexityException`, `RATE_LIMIT_EXCEEDED`, `ConcurrencyException`, `INTERNAL_SERVER_ERROR` + lowercase variants.
+  - `mondayRequest()` retries HTTP 429/5xx (honors `retry-after`), retriable error strings, and network faults (`fetch failed`, `ECONNRESET`, `ETIMEDOUT`, `EAI_AGAIN`, `ENOTFOUND`, socket hang up). Default 5 retries, exponential backoff (capped at 30s).
+  - `uploadFileToUpdate` bumped to 4 attempts using `isRetriableMondayError()` — trigger was Camila's Baden photo failures on 2026-06-01.
+  - `isRetriableMondayError(text)` exported for reuse.
+- **Batch reconciler** — `getItemUpdatesBatch(itemIds, limit = 10)` batches ~25 items per API call. `commentReconciler.js` now calls it instead of looping per-item. Much lower API pressure per 15-min run.
+- **DailyReportBot new services**:
+  - `src/services/birdseyeSummary.js` → `postBirdsEyeSummary()` — corporate bird's-eye view (scope, cost, CORs, total to bill, days worked). Endpoint: `/scheduler/birdseye-summary`. Posts to `DAILY_SUMMARY_CHANNEL_ID`.
+  - `src/services/benchmarkSheet.js` → `refreshBenchmarkSheet()` — Google Sheet of Walmart projects: foreman + company h/door benchmarks, expected vs actual hours (Clockify), on-track/ahead/behind. `FOREMEN_GROUP_ID = 6913c26c4d8b0c5a9ccd975c`. Env: `BENCHMARK_SHEET_FOLDER_ID`. Endpoint: `/scheduler/benchmark-sheet`.
+- **TaskBot new endpoints**:
+  - `POST /api/lodging-match` — LodgingBot records lodging matches (amount, project, dates).
+  - `GET /api/qbo/project-financials` — QuickBooks project financials (used by DRB birdseye + benchmark).
+- **ClockBot push notifications** — new `src/routes/push.js` mounted at `/api/push` with JWT auth.
+- **Note**: ~2.5 months since last doc update; verify specific dates/files against `git log` if load-bearing.
 
 ### 2026-04-22: Scheduler Fix, Cycle Prevention, Foreman Verification, Processing Feedback
 - **Scheduler .env was missing** — All scheduled jobs across all bots were failing 401 since SCHEDULER_MODE=external was enabled. Created `.env` on server. Also fixed ESM import ordering: token read at request time via `getToken()` instead of module-level constant.
