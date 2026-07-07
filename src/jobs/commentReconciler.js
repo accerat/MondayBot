@@ -5,7 +5,7 @@
 
 import cron from 'node-cron';
 import { getAllMappings } from '../services/threadMapper.js';
-import { getItemUpdates } from '../services/mondayApi.js';
+import { getItemUpdatesBatch } from '../services/mondayApi.js';
 import { getDiscordUser } from '../services/crewMapping.js';
 import { getItem } from '../services/mondayApi.js';
 import { updateAllPinnedPosts } from '../services/projectSyncOrchestrator.js';
@@ -60,21 +60,36 @@ export async function reconcileComments(client) {
 
   console.log(`[comment-reconciler] Checking ${entries.length} mapped items for missed comments since ${cutoff.toISOString()}`);
 
+  // Phase 1 — batch-fetch recent updates for all items (25 per query) to minimize
+  // API pressure. Monday's anti-abuse throttle (API_TEMPORARILY_BLOCKED) triggers on
+  // request volume, so ~10 queries here instead of one-per-item avoids tripping it.
+  const BATCH_SIZE = 25;
+  const updatesByItem = new Map();
+  for (let i = 0; i < entries.length; i += BATCH_SIZE) {
+    const batch = entries.slice(i, i + BATCH_SIZE);
+    const ids = batch.map(([id]) => id);
+    try {
+      const result = await getItemUpdatesBatch(ids, 10);
+      for (const [id, ups] of result) updatesByItem.set(id, ups);
+      checked += batch.length;
+    } catch (error) {
+      console.error(`[comment-reconciler] Batch fetch failed for ${ids.length} items:`, error.message);
+      errors += batch.length;
+    }
+    // Gentle spacing between batches
+    await new Promise(resolve => setTimeout(resolve, 300));
+  }
+
+  // Phase 2 — only items with recent updates need Discord reconciliation.
+  const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
+
   for (const [mondayItemId, data] of entries) {
     const threadId = data.threadId || data;
+    const updates = updatesByItem.get(String(mondayItemId)) || [];
+    const recentUpdates = updates.filter(u => new Date(u.created_at) > cutoff);
+    if (recentUpdates.length === 0) continue;
 
     try {
-      // Fetch recent updates from Monday
-      const updates = await getItemUpdates(mondayItemId, 10);
-
-      // Filter to updates in the last 24h
-      const recentUpdates = updates.filter(u => new Date(u.created_at) > cutoff);
-
-      if (recentUpdates.length === 0) {
-        checked++;
-        continue;
-      }
-
       // Fetch the Discord thread
       let thread;
       try {
@@ -96,7 +111,7 @@ export async function reconcileComments(client) {
       // Fetch recent bot messages from the thread (last 50)
       const recentMessages = await thread.messages.fetch({ limit: 50 });
       const botMessages = recentMessages.filter(m => m.author.id === client.user.id);
-      const botMessageTexts = botMessages.map(m => m.content);
+      const botMessageTexts = botMessages.map(m => norm(m.content));
 
       // Check each Monday update against Discord messages
       for (const update of recentUpdates) {
@@ -110,11 +125,12 @@ export async function reconcileComments(client) {
             updateText.includes('from Discord') ||
             updateText.startsWith('Daily Report —') ||
             updateText.includes('TIMELINE OVERRUN') ||
-            updateText.includes('Foreman ') && updateText.includes('confirmed they will be on site')) continue;
+            (updateText.includes('Foreman ') && updateText.includes('confirmed they will be on site'))) continue;
 
-        // Check if this update's full text appears in any bot message
-        const escaped = updateText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const alreadyPosted = botMessageTexts.some(msg => msg.includes(escaped));
+        // Check if this update's text already appears in a bot message.
+        // (Plain substring match on normalized text — the bot embeds the raw comment.)
+        const target = norm(updateText);
+        const alreadyPosted = target && botMessageTexts.some(msg => msg.includes(target));
 
         if (!alreadyPosted) {
           console.log(`[comment-reconciler] Missed comment found: "${updateText.substring(0, 60)}..." from ${authorName} on item ${mondayItemId}`);
@@ -127,11 +143,6 @@ export async function reconcileComments(client) {
           await new Promise(resolve => setTimeout(resolve, 1000));
         }
       }
-
-      checked++;
-
-      // Rate limit between items
-      await new Promise(resolve => setTimeout(resolve, 500));
     } catch (error) {
       console.error(`[comment-reconciler] Error checking item ${mondayItemId}:`, error.message);
       errors++;

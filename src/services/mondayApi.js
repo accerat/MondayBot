@@ -7,31 +7,90 @@ import FormData from 'form-data';
 const MONDAY_API_TOKEN = process.env.MONDAY_API_TOKEN;
 const MONDAY_API_URL = 'https://api.monday.com/v2';
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Monday.com transient failures that are safe to retry.
+// API_TEMPORARILY_BLOCKED is Monday's anti-abuse throttle — it clears on its own
+// (usually within ~1 min) and is what blocked morning photo uploads on 2026-07-06.
+const RETRIABLE_PATTERNS = [
+  'API_TEMPORARILY_BLOCKED', 'temporarily blocked',
+  'ComplexityException', 'complexity',
+  'RATE_LIMIT_EXCEEDED', 'rate limit', 'Rate Limit',
+  'ConcurrencyException', 'maxConcurrencyExceeded', 'concurrent',
+  'INTERNAL_SERVER_ERROR', 'Internal server error',
+];
+
+export function isRetriableMondayError(text) {
+  return RETRIABLE_PATTERNS.some((p) => text.includes(p));
+}
+
 /**
- * Make a request to Monday.com API
+ * Make a request to Monday.com API.
+ * Retries transient failures — temporary API blocks, rate/complexity/concurrency
+ * limits, HTTP 429/5xx, and network errors — with exponential backoff.
  */
-async function mondayRequest(query, variables = {}) {
+async function mondayRequest(query, variables = {}, { retries = 5 } = {}) {
   if (!MONDAY_API_TOKEN) {
     throw new Error('MONDAY_API_TOKEN not configured');
   }
 
-  const response = await fetch(MONDAY_API_URL, {
-    method: 'POST',
-    headers: {
-      'Authorization': MONDAY_API_TOKEN,
-      'Content-Type': 'application/json',
-      'API-Version': '2024-10'
-    },
-    body: JSON.stringify({ query, variables })
-  });
+  let lastError;
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const response = await fetch(MONDAY_API_URL, {
+        method: 'POST',
+        headers: {
+          'Authorization': MONDAY_API_TOKEN,
+          'Content-Type': 'application/json',
+          'API-Version': '2024-10'
+        },
+        body: JSON.stringify({ query, variables })
+      });
 
-  const data = await response.json();
+      // HTTP-level rate limiting / server errors
+      if (response.status === 429 || response.status >= 500) {
+        lastError = new Error(`Monday.com HTTP ${response.status}`);
+        if (attempt < retries) {
+          const retryAfter = parseInt(response.headers.get('retry-after'), 10);
+          const waitMs = retryAfter ? retryAfter * 1000 : Math.min(2000 * 2 ** (attempt - 1), 30000);
+          console.log(`[MondayAPI] HTTP ${response.status} — retry ${attempt}/${retries} in ${Math.round(waitMs / 1000)}s`);
+          await sleep(waitMs);
+          continue;
+        }
+        throw lastError;
+      }
 
-  if (data.errors) {
-    throw new Error(`Monday.com API error: ${JSON.stringify(data.errors)}`);
+      const data = await response.json();
+
+      if (data.errors) {
+        const errStr = JSON.stringify(data.errors);
+        if (isRetriableMondayError(errStr) && attempt < retries) {
+          const retryIn = data.errors?.[0]?.extensions?.retry_in_seconds;
+          const waitMs = retryIn ? retryIn * 1000 : Math.min(3000 * 2 ** (attempt - 1), 30000);
+          console.log(`[MondayAPI] Transient error — retry ${attempt}/${retries} in ${Math.round(waitMs / 1000)}s: ${errStr.substring(0, 120)}`);
+          lastError = new Error(`Monday.com API error: ${errStr}`);
+          await sleep(waitMs);
+          continue;
+        }
+        throw new Error(`Monday.com API error: ${errStr}`);
+      }
+
+      return data.data;
+    } catch (err) {
+      lastError = err;
+      const msg = String(err?.message || err);
+      // Retry only genuine network faults here; API errors were already handled above.
+      const isNetwork = /fetch failed|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|socket hang up|network/i.test(msg);
+      if (isNetwork && attempt < retries) {
+        const waitMs = Math.min(2000 * 2 ** (attempt - 1), 30000);
+        console.log(`[MondayAPI] Network error — retry ${attempt}/${retries} in ${Math.round(waitMs / 1000)}s: ${msg}`);
+        await sleep(waitMs);
+        continue;
+      }
+      throw err;
+    }
   }
-
-  return data.data;
+  throw lastError;
 }
 
 /**
@@ -78,8 +137,9 @@ export async function uploadFileToUpdate(updateId, fileUrl, fileName) {
 
   const query = `mutation ($file: File!) { add_file_to_update (update_id: ${updateId}, file: $file) { id } }`;
 
-  // Retry up to 3 times on transient Monday.com errors (500, network failures)
-  const MAX_ATTEMPTS = 3;
+  // Retry on transient Monday.com errors: 500s, temporary API blocks,
+  // rate/complexity/concurrency limits, and network failures.
+  const MAX_ATTEMPTS = 4;
   let lastError;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
@@ -109,13 +169,13 @@ export async function uploadFileToUpdate(updateId, fileUrl, fileName) {
       });
 
       if (data.errors) {
-        // Check if it's a retriable error (500, internal server error)
         const errMsg = JSON.stringify(data.errors);
-        const isRetriable = errMsg.includes('500') || errMsg.includes('INTERNAL_SERVER_ERROR') || errMsg.includes('Internal server error');
+        const isRetriable = errMsg.includes('500') || isRetriableMondayError(errMsg);
         if (isRetriable && attempt < MAX_ATTEMPTS) {
           lastError = new Error(`Monday.com file upload error: ${errMsg}`);
-          console.log(`[MondayAPI] Retry ${attempt}/${MAX_ATTEMPTS} for "${fileName}" after error`);
-          await new Promise(r => setTimeout(r, 2000 * attempt)); // exponential backoff
+          const waitMs = Math.min(3000 * 2 ** (attempt - 1), 20000); // 3s, 6s, 12s
+          console.log(`[MondayAPI] Retry ${attempt}/${MAX_ATTEMPTS} for "${fileName}" in ${Math.round(waitMs / 1000)}s after: ${errMsg.substring(0, 100)}`);
+          await new Promise(r => setTimeout(r, waitMs));
           continue;
         }
         throw new Error(`Monday.com file upload error: ${errMsg}`);
@@ -445,6 +505,57 @@ export async function getItemUpdates(itemId, limit = 25) {
     }
   }
   return all;
+}
+
+/**
+ * Batch-fetch recent updates for many items in a single query.
+ * Returns a Map of itemId(String) -> flattened updates[] (same shape as getItemUpdates).
+ * Used by the comment reconciler to avoid one-query-per-item, which was overwhelming
+ * Monday's anti-abuse throttle (API_TEMPORARILY_BLOCKED).
+ * @param {string[]} itemIds - Monday.com item IDs (keep batches <= ~25 for complexity)
+ * @param {number} limit - Max updates per item
+ */
+export async function getItemUpdatesBatch(itemIds, limit = 10) {
+  if (!itemIds || itemIds.length === 0) return new Map();
+
+  const query = `
+    query ($itemIds: [ID!], $limit: Int!) {
+      items (ids: $itemIds) {
+        id
+        updates (limit: $limit) {
+          id
+          text_body
+          created_at
+          creator { id name }
+          assets { id name url public_url file_extension }
+          replies {
+            id
+            text_body
+            created_at
+            creator { id name }
+          }
+        }
+      }
+    }
+  `;
+
+  const result = await mondayRequest(query, { itemIds, limit });
+  const map = new Map();
+  for (const item of result.items || []) {
+    const all = [];
+    for (const u of item.updates || []) {
+      all.push(u);
+      if (u.replies) {
+        for (const r of u.replies) {
+          r.isReply = true;
+          r.parentId = u.id;
+          all.push(r);
+        }
+      }
+    }
+    map.set(String(item.id), all);
+  }
+  return map;
 }
 
 /**
