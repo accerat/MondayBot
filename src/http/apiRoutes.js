@@ -5,9 +5,28 @@
 import express from 'express';
 import { addUpdate, getItem, uploadFileToUpdate } from '../services/mondayApi.js';
 import { getMondayItemIdFromThread } from '../services/threadMapper.js';
+import { createNameResolver } from '../../../shared/employeeNames.js';
 
 const router = express.Router();
 router.use(express.json());
+
+// Discord client (set from index.js) — lets name resolution fall back to guild
+// nicknames when ClockBot's directory doesn't have an id.
+let discordClient = null;
+export function setClient(client) { discordClient = client; }
+
+// Resolve <@id> mentions in inbound text (from DailyReportBot etc.) to real names
+// before posting to Monday.com, where a raw mention renders as a bare number.
+const nameResolver = createNameResolver({ botName: 'MondayBot' });
+async function resolveNames(text) {
+  if (!text) return text;
+  try {
+    return await nameResolver.replaceMentions(text, { client: discordClient, guildId: process.env.GUILD_ID });
+  } catch (err) {
+    console.warn('[API] name resolution failed, posting raw text:', err.message);
+    return text;
+  }
+}
 
 // Auth middleware — uses same SCHEDULER_TOKEN as inter-bot auth
 function auth(req, res, next) {
@@ -48,7 +67,7 @@ router.post('/forward-to-monday', async (req, res) => {
       return res.status(400).json({ success: false, error: 'itemId or threadId is required' });
     }
 
-    const result = await addUpdate(itemId, body);
+    const result = await addUpdate(itemId, await resolveNames(body));
     res.json({
       success: true,
       itemId,
@@ -80,7 +99,7 @@ router.post('/forward-photos-to-monday', async (req, res) => {
 
     // Create the update first
     const updateBody = body || `📸 ${photos.length} photo(s) uploaded from Discord`;
-    const update = await addUpdate(itemId, updateBody);
+    const update = await addUpdate(itemId, await resolveNames(updateBody));
     const updateId = update?.id;
 
     if (!updateId) {

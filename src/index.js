@@ -1,6 +1,16 @@
 // src/index.js
 // MondayBot - Bidirectional sync between Monday.com and Discord
 import 'dotenv/config';
+
+// Global error handlers — log + keep running. Prevents an unhandled rejection
+// (e.g., Discord login failure) from killing the process and starting a pm2
+// restart loop that burns the daily Discord identify quota.
+process.on('unhandledRejection', (err) => {
+  console.error('[unhandledRejection — caught, NOT exiting]', err);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException — caught, NOT exiting]', err);
+});
 import { Client, GatewayIntentBits, Events, Partials, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder } from 'discord.js';
 import express from 'express';
 import { fileURLToPath } from 'url';
@@ -14,7 +24,7 @@ import { initializeCommentReconciler } from './jobs/commentReconciler.js';
 import { addUpdate } from './services/mondayApi.js';
 import { handleMondayBotButton, handleMondayBotModal } from './services/mondayMentionHandler.js';
 import schedulerRoutes, { setClient as setSchedulerClient } from './http/schedulerRoutes.js';
-import apiRoutes from './http/apiRoutes.js';
+import apiRoutes, { setClient as setApiClient } from './http/apiRoutes.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -176,11 +186,30 @@ client.once(Events.ClientReady, c => {
   initializeHealthMonitor(client);
   initializeCommentReconciler(client);
 
-  // Set Discord client for scheduler HTTP endpoints
+  // Set Discord client for scheduler + cross-bot API HTTP endpoints
   setSchedulerClient(client);
+  setApiClient(client);
 });
 
-client.login(process.env.BOT_TOKEN);
+async function loginWithRetry() {
+  let attempt = 0;
+  while (true) {
+    attempt++;
+    try {
+      await client.login(process.env.BOT_TOKEN);
+      console.log(`[discord] login OK (attempt ${attempt})`);
+      return;
+    } catch (err) {
+      const msg = String(err?.message || err);
+      const isQuota = /sessions remaining/i.test(msg);
+      const waitSec = isQuota ? 900 : 60;
+      console.error(`[discord] login failed (attempt ${attempt}): ${msg}`);
+      console.error(`[discord] sleeping ${waitSec}s before next try (quota=${isQuota})`);
+      await new Promise(r => setTimeout(r, waitSec * 1000));
+    }
+  }
+}
+loginWithRetry();
 
 // ==================== Express Webhook Server ====================
 
