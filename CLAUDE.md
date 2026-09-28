@@ -81,7 +81,7 @@ Bidirectional sync between Monday.com and Discord:
 - **Cycle prevention** - Discord→Monday posts are detected and not echoed back to Discord
 - **Monday API retry** - All API calls transparently retry on `API_TEMPORARILY_BLOCKED`, rate/complexity/concurrency exceptions, HTTP 429/5xx, and network faults (see `isRetriableMondayError` in `mondayApi.js`)
 - **Batch reconciler** - Uses `getItemUpdatesBatch` (~25 items per API call) instead of per-item loop for much lower API pressure
-- **Mention resolution** - When forwarding Discord text to Monday (`mondayMentionHandler.js`), `<@id>` mentions are replaced with real names via `shared/employeeNames.js` `createNameResolver` → `replaceMentions` (ClockBot `/api/webhook/people` directory, falls back to guild nickname). Needs `CLOCKBOT_API_URL` + `CLOCKBOT_WEBHOOK_TOKEN` in `.env`.
+- **Mention resolution** - When forwarding Discord text to Monday, `<@id>` mentions are replaced with real names via `shared/employeeNames.js` `createNameResolver` → `replaceMentions` (ClockBot `/api/webhook/people` directory, falls back to guild nickname). Applied in BOTH `mondayMentionHandler.js` (all 5 @MondayBot forward paths) and `apiRoutes.js` (`/api/forward-to-monday` + `/api/forward-photos-to-monday`, so DailyReportBot & other cross-bot callers are covered centrally). `apiRoutes` gets the Discord client via `setClient()` from `index.js`. Needs `CLOCKBOT_API_URL` + `CLOCKBOT_WEBHOOK_TOKEN` in `.env`.
 
 ### Cross-Bot API (port 3001)
 | Endpoint | Method | Description |
@@ -281,7 +281,8 @@ SCHEDULER_MODE=<set to "external" to disable local cron, let central scheduler h
 - **Fix**: `mondayMentionHandler.js` now imports `createNameResolver` from `../../../shared/employeeNames.js` and runs every forwarded text through `replaceMentions({client, guildId})` before `addUpdate`. Covers all 5 forward paths: reply-forward, `update`/note command, `attach` caption, "forward recent messages" button, and the update modal. Wrapped in a `resolveNames()` helper with try/catch so name lookup can never break forwarding.
 - **Directory source**: ClockBot `GET /api/webhook/people` (54 people). Fallback chain: ClockBot name → guild nickname → global/username → "Unknown user". So even when ClockBot is down, mentions become nicknames (ClockBot sets nicknames to real names), never raw ids.
 - **Env**: added `CLOCKBOT_API_URL=http://127.0.0.1:3002` + `CLOCKBOT_WEBHOOK_TOKEN` (copied from clockbot `.env`) to MondayBot server `.env`.
-- **Note**: ClockBot binds `0.0.0.0:3002` but had a high lifetime restart count; verify it's up if names ever stop resolving (`curl -H "Authorization: Bearer <tok>" http://127.0.0.1:3002/api/webhook/people`).
+- **Also fixed centrally**: `apiRoutes.js` (`/api/forward-to-monday`, `/api/forward-photos-to-monday`) now resolves mentions too, so DailyReportBot's forwards no longer post raw `<@id>`. Client wired via `setApiClient()` in `index.js`. This commit also version-controlled the previously-uncommitted crash-protection in `index.js` (git now matches production).
+- **Note**: ClockBot binds `0.0.0.0:3002` but restarts often; verify it's up if names ever stop resolving (`curl -H "Authorization: Bearer <tok>" http://127.0.0.1:3002/api/webhook/people`). Its weekly-summary crash (`Invalid number value`, Sundays 04:59 UTC) was already fixed by a rewrite of `clockbot/src/jobs/summaryReport.js` (field truncation + chunking + try/catch) deployed 2026-09-28.
 
 ### 2026-07-07: Doc catch-up — retry system, batch reconciler, DRB/TaskBot/ClockBot growth
 - **Monday API retry system** — `src/services/mondayApi.js` grew a full retry layer after the 2026-07-06 morning outage (`API_TEMPORARILY_BLOCKED` blocked all photo uploads):
