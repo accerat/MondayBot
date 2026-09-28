@@ -5,6 +5,7 @@ import { getThreadId } from './threadMapper.js';
 import { addUpdate, uploadFileToUpdate, updateColumn, getItem } from './mondayApi.js';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, EmbedBuilder } from 'discord.js';
 import sharp from 'sharp';
+import { createNameResolver } from '../../../shared/employeeNames.js';
 
 const MLB_OFFICE_ROLE_ID = process.env.MLB_OFFICE_ROLE_ID || '1396930700447449149';
 const OPS_LEADERSHIP_ROLE_ID = '1411793485799096490';
@@ -14,6 +15,21 @@ const ASSISTANT_FOREMAN_ROLE_ID = '1399146558662115409';
 
 // Photo selection sessions for @MondayBot photo flow
 const photoSessions = new Map();
+
+// Resolves <@id> mentions to real employee names (via ClockBot's directory) before
+// posting Discord text to Monday.com, where a raw mention renders as a bare number.
+const nameResolver = createNameResolver({ botName: 'MondayBot' });
+async function resolveNames(text, source) {
+  try {
+    return await nameResolver.replaceMentions(text, {
+      client: source?.client,
+      guildId: source?.guildId || process.env.GUILD_ID,
+    });
+  } catch (err) {
+    console.warn('[MondayBot] name resolution failed, posting raw text:', err.message);
+    return text;
+  }
+}
 
 /**
  * Handle @MondayBot mention
@@ -141,7 +157,7 @@ async function handleForwardReply(message, mondayItemId) {
     updateText += `\n\n**Note from ${forwardedBy}:** ${extraNote}`;
   }
 
-  await addUpdate(mondayItemId, updateText);
+  await addUpdate(mondayItemId, await resolveNames(updateText, message));
   await message.react('✅');
   await message.reply(`✅ Forwarded to Monday.com`);
 
@@ -161,7 +177,7 @@ async function handleUpdateCommand(message, mondayItemId, text) {
   const updateText = `**From ${getNickname(message)} (Discord):**\n${text}`;
 
   // Post to Monday.com
-  await addUpdate(mondayItemId, updateText);
+  await addUpdate(mondayItemId, await resolveNames(updateText, message));
 
   // Confirm in Discord
   await message.react('✅');
@@ -221,7 +237,7 @@ async function handleAttachCommand(message, mondayItemId, caption) {
 
   // Create update first, then attach files to it
   const updateText = `**From ${getNickname(message)} (Discord):**\n${caption || `${attachments.length} file(s) attached`}`;
-  const update = await addUpdate(mondayItemId, updateText);
+  const update = await addUpdate(mondayItemId, await resolveNames(updateText, message));
 
   let uploaded = 0;
   for (const attachment of attachments) {
@@ -460,7 +476,7 @@ export async function handleMondayBotButton(interaction) {
       }).join('\n\n');
 
       const body = `**Recent Discord Messages (forwarded by ${interaction.member?.displayName || interaction.user.displayName}):**\n\n${lines}`;
-      await addUpdate(mondayItemId, body);
+      await addUpdate(mondayItemId, await resolveNames(body, interaction));
       await interaction.editReply(`✅ Forwarded ${recent.length} recent message(s) to Monday.com`);
     } catch (error) {
       await interaction.editReply(`❌ Failed: ${error.message}`);
@@ -566,7 +582,7 @@ export async function handleMondayBotModal(interaction) {
     try {
       const text = interaction.fields.getTextInputValue('update_text');
       const name = interaction.member?.displayName || interaction.user.displayName;
-      await addUpdate(mondayItemId, `**From ${name} (Discord):**\n${text}`);
+      await addUpdate(mondayItemId, await resolveNames(`**From ${name} (Discord):**\n${text}`, interaction));
       await interaction.editReply('✅ Update posted to Monday.com');
     } catch (error) {
       await interaction.editReply(`❌ Failed: ${error.message}`);
